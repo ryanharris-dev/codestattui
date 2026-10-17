@@ -264,7 +264,7 @@ func (m Model) row(t task.Task, selected bool) string {
 		mark = dim.Render("…")
 	}
 	name := t.Display()
-	// layout: caret(2) name icons(8) mark(2) title(rest)
+	// layout: caret(2) icons(8) mark(2) name title(rest)
 	fixed := 2 + lipgloss.Width(name) + 1 + 8 + 2
 	avail := m.w - fixed
 	if avail > 3 && title != "" {
@@ -276,7 +276,7 @@ func (m Model) row(t task.Task, selected bool) string {
 	if selected {
 		caret = "▸"
 	}
-	return fmt.Sprintf("%s %s %s%s %s", caret, name, icons, mark, title)
+	return fmt.Sprintf("%s %s%s %s %s", caret, icons, mark, name, title)
 }
 
 func (m Model) detailView(t task.Task) string {
