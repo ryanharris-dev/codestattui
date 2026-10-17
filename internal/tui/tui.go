@@ -264,6 +264,9 @@ func (m Model) row(t task.Task, selected bool) string {
 		mark = dim.Render("…")
 	}
 	name := t.Display()
+	if t.Repo != "" {
+		name += " " + dim.Render(t.Repo)
+	}
 	// layout: caret(2) icons(8) mark(2) name title(rest)
 	fixed := 2 + lipgloss.Width(name) + 1 + 8 + 2
 	avail := m.w - fixed
@@ -302,6 +305,9 @@ func (m Model) detailView(t task.Task) string {
 		} else if r.PRErr != nil {
 			add("PR  ", red.Render(r.PRErr.Error()))
 		}
+	}
+	if t.Repo != "" {
+		add("repo", t.Repo)
 	}
 	if t.Session != "" {
 		add("claude", fmt.Sprintf("%s  (%s)", t.Session, t.Dir))

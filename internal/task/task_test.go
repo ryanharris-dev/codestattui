@@ -22,3 +22,40 @@ func TestFindJiraKey(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestNormalizeJiraURL(t *testing.T) {
+	tk := Task{Jira: "https://x.atlassian.net/browse/cno-800"}
+	if err := Normalize(&tk); err != nil || tk.Jira != "CNO-800" {
+		t.Errorf("got %q, %v", tk.Jira, err)
+	}
+	bad := Task{Jira: "nonsense"}
+	if err := Normalize(&bad); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestFindByRepo(t *testing.T) {
+	tasks := []Task{
+		{ID: "1", Jira: "CNO-1", Repo: "fe"},
+		{ID: "2", Jira: "CNO-1", Repo: "be"},
+	}
+	if _, err := Find(tasks, "CNO-1", ""); err == nil {
+		t.Error("expected ambiguity error")
+	}
+	if i, err := Find(tasks, "cno-1", "be"); err != nil || i != 1 {
+		t.Errorf("got %d, %v", i, err)
+	}
+	if i, err := Find(tasks, "1", ""); err != nil || i != 0 {
+		t.Errorf("id lookup got %d, %v", i, err)
+	}
+	if _, err := Find(tasks, "CNO-2", ""); err == nil {
+		t.Error("expected not found")
+	}
+}
+
+func TestNormalizeRepoFromPR(t *testing.T) {
+	tk := Task{PR: "https://github.com/org/connect1-backend/pull/3"}
+	if err := Normalize(&tk); err != nil || tk.Repo != "connect1-backend" {
+		t.Errorf("got %q, %v", tk.Repo, err)
+	}
+}

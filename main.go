@@ -16,9 +16,10 @@ const usage = `codestattui - task status from JIRA and GitHub
 Usage:
   codestattui                       open the TUI
   codestattui list                  print tasks
-  codestattui add [--jira KEY] [--pr URL|owner/repo#N] [--label TEXT] [--session ID] [--dir PATH]
-  codestattui update <id|jira|pr|label> [--jira KEY] [--pr URL] [--label TEXT] [--session ID] [--dir PATH]
-  codestattui rm <id|jira|pr>
+  codestattui add [--jira KEY|URL] [--pr URL|owner/repo#N] [--label TEXT] [--session ID] [--dir PATH] [--repo NAME]
+  codestattui update <id|jira|pr|label> [--jira KEY|URL] [--pr URL] [--label TEXT] [--session ID] [--dir PATH]
+                                    [--repo NAME]   (selects among tasks sharing a ticket)
+  codestattui rm <id|jira|pr|label> [--repo NAME]
 
 Files live in $CODESTATTUI_HOME or ~/.config/codestattui (tasks.yaml, config.yaml).
 `
@@ -49,7 +50,7 @@ func run(args []string) error {
 			return err
 		}
 		for _, t := range tasks {
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", t.ID, t.Jira, t.PR, t.Label, t.Session)
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Jira, t.Repo, t.PR, t.Label, t.Session)
 		}
 		return nil
 	case "add":
@@ -60,6 +61,7 @@ func run(args []string) error {
 		fs.StringVar(&t.Label, "label", "", "display label")
 		fs.StringVar(&t.Session, "session", "", "Claude Code session id to resume from the TUI")
 		fs.StringVar(&t.Dir, "dir", "", "directory the session was started in (default: cwd)")
+		fs.StringVar(&t.Repo, "repo", "", "repository the work happens in (default: from --pr or --dir)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -89,6 +91,7 @@ func run(args []string) error {
 		label := fs.String("label", "", "display label")
 		session := fs.String("session", "", "Claude Code session id")
 		dir := fs.String("dir", "", "session directory")
+		repo := fs.String("repo", "", "select the task in this repo (does not change it)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -96,9 +99,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		i := task.Find(tasks, args[1])
-		if i < 0 {
-			return fmt.Errorf("no task matching %q", args[1])
+		i, err := task.Find(tasks, args[1], *repo)
+		if err != nil {
+			return err
 		}
 		set := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -131,9 +134,14 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		i := task.Find(tasks, args[1])
-		if i < 0 {
-			return fmt.Errorf("no task matching %q", args[1])
+		fs := flag.NewFlagSet("rm", flag.ContinueOnError)
+		repo := fs.String("repo", "", "select the task in this repo")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		i, err := task.Find(tasks, args[1], *repo)
+		if err != nil {
+			return err
 		}
 		return task.Save(path, append(tasks[:i], tasks[i+1:]...))
 	}
@@ -142,7 +150,7 @@ func run(args []string) error {
 
 func dup(tasks []task.Task, t task.Task) int {
 	for i, o := range tasks {
-		if (t.Jira != "" && strings.EqualFold(o.Jira, t.Jira)) || (t.PR != "" && o.PR == t.PR) {
+		if (t.Jira != "" && strings.EqualFold(o.Jira, t.Jira) && o.Repo == t.Repo) || (t.PR != "" && o.PR == t.PR) {
 			return i
 		}
 	}

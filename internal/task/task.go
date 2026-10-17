@@ -3,6 +3,7 @@ package task
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,7 +20,10 @@ type Task struct {
 	PR    string `yaml:"pr,omitempty"`   // owner/repo#123
 	// Session is a Claude Code session id; Dir is where it was started (sessions are per-directory).
 	Session string `yaml:"session,omitempty"`
-	Dir     string `yaml:"dir,omitempty"`
+	// Repo is the repository the work happens in; with Jira it identifies a task, so one
+	// ticket can have a row per repo (each with its own PR and session).
+	Repo string `yaml:"repo,omitempty"`
+	Dir  string `yaml:"dir,omitempty"`
 }
 
 type file struct {
@@ -105,21 +109,57 @@ func Save(path string, tasks []Task) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// Find locates a task by id, jira key, or PR ref.
-func Find(tasks []Task, key string) int {
+// Find locates a task by id, jira key, PR ref, or label. An exact id always wins; otherwise
+// repo (if non-empty) narrows the match, and several matches are an error.
+func Find(tasks []Task, key, repo string) (int, error) {
 	for i, t := range tasks {
-		if t.ID == key || strings.EqualFold(t.Jira, key) || t.PR == key || (t.Label != "" && t.Label == key) {
-			return i
+		if t.ID == key {
+			return i, nil
 		}
 	}
-	return -1
+	found := -1
+	for i, t := range tasks {
+		if !(strings.EqualFold(t.Jira, key) || t.PR == key || (t.Label != "" && t.Label == key)) {
+			continue
+		}
+		if repo != "" && t.Repo != repo {
+			continue
+		}
+		if found >= 0 {
+			return -1, fmt.Errorf("%q matches several tasks; use the task id or --repo", key)
+		}
+		found = i
+	}
+	if found < 0 {
+		return -1, fmt.Errorf("no task matching %q", key)
+	}
+	return found, nil
+}
+
+// RepoName names the git repository containing dir ("" if it isn't one). It resolves through
+// worktrees to the main checkout.
+func RepoName(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(filepath.Dir(strings.TrimSpace(string(out))))
+}
+
+func hasID(tasks []Task, id string) bool {
+	for _, t := range tasks {
+		if t.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func NewID(tasks []Task) string {
 	n := len(tasks) + 1
 	for {
 		id := strconv.Itoa(n)
-		if Find(tasks, id) < 0 {
+		if !hasID(tasks, id) {
 			return id
 		}
 		n++
@@ -136,10 +176,12 @@ func Normalize(t *Task) error {
 		t.PR = pr
 	}
 	if t.Jira != "" {
-		t.Jira = strings.ToUpper(strings.TrimSpace(t.Jira))
-		if !jiraRe.MatchString(t.Jira) {
-			return fmt.Errorf("invalid JIRA key %q", t.Jira)
+		// Accepts a bare key or a browse URL.
+		key := FindJiraKey(t.Jira)
+		if key == "" {
+			return fmt.Errorf("invalid JIRA key or URL %q", t.Jira)
 		}
+		t.Jira = key
 	}
 	if t.Session != "" && t.Dir == "" {
 		wd, err := os.Getwd()
@@ -147,6 +189,15 @@ func Normalize(t *Task) error {
 			return err
 		}
 		t.Dir = wd
+	}
+	if t.Repo == "" {
+		switch {
+		case t.PR != "":
+			repo, _ := SplitPR(t.PR)
+			t.Repo = filepath.Base(repo)
+		case t.Dir != "":
+			t.Repo = RepoName(t.Dir)
+		}
 	}
 	if t.Jira == "" && t.PR == "" {
 		return fmt.Errorf("task needs a --jira key or a --pr")
