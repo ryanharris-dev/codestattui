@@ -16,8 +16,8 @@ const usage = `codestattui - task status from JIRA and GitHub
 Usage:
   codestattui                       open the TUI
   codestattui list                  print tasks
-  codestattui add [--jira KEY] [--pr URL|owner/repo#N] [--label TEXT]
-  codestattui update <id|jira|pr> [--jira KEY] [--pr URL] [--label TEXT]
+  codestattui add [--jira KEY] [--pr URL|owner/repo#N] [--label TEXT] [--session ID] [--dir PATH]
+  codestattui update <id|jira|pr|label> [--jira KEY] [--pr URL] [--label TEXT] [--session ID] [--dir PATH]
   codestattui rm <id|jira|pr>
 
 Files live in $CODESTATTUI_HOME or ~/.config/codestattui (tasks.yaml, config.yaml).
@@ -49,7 +49,7 @@ func run(args []string) error {
 			return err
 		}
 		for _, t := range tasks {
-			fmt.Printf("%s\t%s\t%s\t%s\n", t.ID, t.Jira, t.PR, t.Label)
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", t.ID, t.Jira, t.PR, t.Label, t.Session)
 		}
 		return nil
 	case "add":
@@ -58,6 +58,8 @@ func run(args []string) error {
 		fs.StringVar(&t.Jira, "jira", "", "JIRA key")
 		fs.StringVar(&t.PR, "pr", "", "PR URL or owner/repo#N")
 		fs.StringVar(&t.Label, "label", "", "display label")
+		fs.StringVar(&t.Session, "session", "", "Claude Code session id to resume from the TUI")
+		fs.StringVar(&t.Dir, "dir", "", "directory the session was started in (default: cwd)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -85,6 +87,8 @@ func run(args []string) error {
 		jira := fs.String("jira", "", "JIRA key")
 		pr := fs.String("pr", "", "PR URL or owner/repo#N")
 		label := fs.String("label", "", "display label")
+		session := fs.String("session", "", "Claude Code session id")
+		dir := fs.String("dir", "", "session directory")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -107,6 +111,12 @@ func run(args []string) error {
 		}
 		if set["label"] {
 			t.Label = *label
+		}
+		if set["session"] {
+			t.Session = *session
+		}
+		if set["dir"] {
+			t.Dir = *dir
 		}
 		if err := task.Normalize(&t); err != nil {
 			return err

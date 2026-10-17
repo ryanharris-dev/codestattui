@@ -17,6 +17,9 @@ type Task struct {
 	Label string `yaml:"label,omitempty"`
 	Jira  string `yaml:"jira,omitempty"` // e.g. ABC-123
 	PR    string `yaml:"pr,omitempty"`   // owner/repo#123
+	// Session is a Claude Code session id; Dir is where it was started (sessions are per-directory).
+	Session string `yaml:"session,omitempty"`
+	Dir     string `yaml:"dir,omitempty"`
 }
 
 type file struct {
@@ -137,6 +140,13 @@ func Normalize(t *Task) error {
 		if !jiraRe.MatchString(t.Jira) {
 			return fmt.Errorf("invalid JIRA key %q", t.Jira)
 		}
+	}
+	if t.Session != "" && t.Dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		t.Dir = wd
 	}
 	if t.Jira == "" && t.PR == "" {
 		return fmt.Errorf("task needs a --jira key or a --pr")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 )
 
 type (
-	pollMsg   struct{}
-	reloadMsg struct{}
-	resultMsg struct {
+	pollMsg       struct{}
+	reloadMsg     struct{}
+	resumeDoneMsg struct{ err error }
+	resultMsg     struct {
 		id  string
 		fp  string
 		res provider.Result
@@ -33,6 +35,7 @@ type Model struct {
 	inflight  map[string]bool
 	mtime     time.Time
 	loadErr   error
+	notice    string
 	cursor    int
 	detail    bool
 	w, h      int
@@ -92,8 +95,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.inflight, msg.id)
 		m.results[msg.id] = msg.res
 		m.fetchedFP[msg.id] = msg.fp
+	case resumeDoneMsg:
+		if msg.err != nil {
+			m.notice = "resume failed: " + msg.err.Error()
+		}
+		return m, m.fetchTasks(false)
 	case tea.KeyMsg:
+		m.notice = ""
 		switch msg.String() {
+		case "o":
+			if m.cursor >= len(m.tasks) {
+				return m, nil
+			}
+			t := m.tasks[m.cursor]
+			if t.Session == "" {
+				m.notice = "no Claude session on this task (add with --session)"
+				return m, nil
+			}
+			c := exec.Command("claude", "--resume", t.Session)
+			c.Dir = t.Dir
+			return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "j", "down":
@@ -208,7 +229,10 @@ func (m Model) View() string {
 	if m.detail && m.cursor < len(m.tasks) {
 		b.WriteString("\n" + m.detailView(m.tasks[m.cursor]))
 	}
-	b.WriteString("\n" + dim.Render("j/k move · enter detail · r refresh · q quit"))
+	if m.notice != "" {
+		b.WriteString("\n" + yellow.Render(trunc(m.notice, m.w)))
+	}
+	b.WriteString("\n" + dim.Render("j/k move · enter detail · o resume claude · r refresh · q quit"))
 	return b.String()
 }
 
@@ -278,6 +302,9 @@ func (m Model) detailView(t task.Task) string {
 		} else if r.PRErr != nil {
 			add("PR  ", red.Render(r.PRErr.Error()))
 		}
+	}
+	if t.Session != "" {
+		add("claude", fmt.Sprintf("%s  (%s)", t.Session, t.Dir))
 	}
 	add("polled", r.Fetched.Format("15:04:05"))
 	return wrap(strings.Join(lines, "\n"), m.w)
