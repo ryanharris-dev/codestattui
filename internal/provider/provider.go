@@ -99,7 +99,16 @@ type ghPR struct {
 	Mergeable         string    `json:"mergeable"`
 	MergeStateStatus  string    `json:"mergeStateStatus"`
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
-	MergeCommit       struct {
+	Reviews           []struct {
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		State string `json:"state"`
+	} `json:"reviews"`
+	ReviewRequests []struct {
+		Login string `json:"login"` // empty for team requests
+	} `json:"reviewRequests"`
+	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 }
@@ -110,7 +119,7 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 		return nil, fmt.Errorf("bad PR ref %q", ref)
 	}
 	out, err := run(ctx, "gh", "pr", "view", fmt.Sprint(num), "--repo", repo, "--json",
-		"title,headRefName,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,mergeCommit")
+		"title,headRefName,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,mergeCommit,reviews,reviewRequests")
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +133,11 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 	case "APPROVED":
 		info.Approval, info.ApprovalText = Good, "approved"
 	case "CHANGES_REQUESTED":
-		info.Approval, info.ApprovalText = Bad, "changes requested"
+		if rerequested(p) {
+			info.Approval, info.ApprovalText = Pending, "re-review requested"
+		} else {
+			info.Approval, info.ApprovalText = Bad, "changes requested"
+		}
 	case "REVIEW_REQUIRED":
 		info.Approval, info.ApprovalText = Pending, "review required"
 	default: // no review policy configured
@@ -154,6 +167,36 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 		info.Merge, info.MergeText = Unknown, strings.ToLower(p.MergeStateStatus)
 	}
 	return info, nil
+}
+
+// rerequested reports whether every reviewer whose latest decisive review requested changes
+// has since been asked to review again. GitHub keeps reviewDecision at CHANGES_REQUESTED
+// until that reviewer approves or the review is dismissed, so a re-request alone doesn't clear it.
+func rerequested(p ghPR) bool {
+	latest := map[string]string{}
+	for _, r := range p.Reviews { // chronological order
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
+			latest[r.Author.Login] = r.State
+		}
+	}
+	requested := map[string]bool{}
+	for _, rr := range p.ReviewRequests {
+		if rr.Login != "" {
+			requested[rr.Login] = true
+		}
+	}
+	blocking := 0
+	for login, state := range latest {
+		if state != "CHANGES_REQUESTED" {
+			continue
+		}
+		blocking++
+		if !requested[login] {
+			return false
+		}
+	}
+	return blocking > 0
 }
 
 // fetchPostMerge combines every check run and commit status on the merge commit, which
