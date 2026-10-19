@@ -32,6 +32,9 @@ type PRInfo struct {
 	CIText       string
 	Merge        State
 	MergeText    string
+	// Post is the combined state of the workflows triggered by the merge commit.
+	Post     State
+	PostText string
 }
 
 type JiraInfo struct {
@@ -81,19 +84,24 @@ func Fetch(ctx context.Context, t task.Task) Result {
 	return r
 }
 
+type ghCheck struct {
+	Typename   string `json:"__typename"`
+	Status     string `json:"status"`     // CheckRun
+	Conclusion string `json:"conclusion"` // CheckRun
+	State      string `json:"state"`      // StatusContext
+}
+
 type ghPR struct {
-	Title             string `json:"title"`
-	HeadRefName       string `json:"headRefName"`
-	State             string `json:"state"`
-	ReviewDecision    string `json:"reviewDecision"`
-	Mergeable         string `json:"mergeable"`
-	MergeStateStatus  string `json:"mergeStateStatus"`
-	StatusCheckRollup []struct {
-		Typename   string `json:"__typename"`
-		Status     string `json:"status"`     // CheckRun
-		Conclusion string `json:"conclusion"` // CheckRun
-		State      string `json:"state"`      // StatusContext
-	} `json:"statusCheckRollup"`
+	Title             string    `json:"title"`
+	HeadRefName       string    `json:"headRefName"`
+	State             string    `json:"state"`
+	ReviewDecision    string    `json:"reviewDecision"`
+	Mergeable         string    `json:"mergeable"`
+	MergeStateStatus  string    `json:"mergeStateStatus"`
+	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
+	MergeCommit       struct {
+		OID string `json:"oid"`
+	} `json:"mergeCommit"`
 }
 
 func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
@@ -102,7 +110,7 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 		return nil, fmt.Errorf("bad PR ref %q", ref)
 	}
 	out, err := run(ctx, "gh", "pr", "view", fmt.Sprint(num), "--repo", repo, "--json",
-		"title,headRefName,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup")
+		"title,headRefName,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,mergeCommit")
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +131,15 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 		info.Approval, info.ApprovalText = Pending, "no review"
 	}
 
-	info.CI, info.CIText = rollup(p)
+	info.CI, info.CIText = rollup(p.StatusCheckRollup)
+	if info.Merged && p.MergeCommit.OID != "" {
+		info.Post, info.PostText = fetchPostMerge(ctx, repo, p.MergeCommit.OID)
+	}
 
 	switch {
+	case info.Merged:
+		// GitHub reports mergeable as UNKNOWN once a PR is merged.
+		info.Merge, info.MergeText = Good, "merged"
 	case p.Mergeable == "CONFLICTING" || p.MergeStateStatus == "DIRTY":
 		info.Merge, info.MergeText = Bad, "conflict"
 	case p.Mergeable == "UNKNOWN":
@@ -142,12 +156,47 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 	return info, nil
 }
 
-func rollup(p ghPR) (State, string) {
-	if len(p.StatusCheckRollup) == 0 {
+// fetchPostMerge combines every check run and commit status on the merge commit, which
+// covers all workflows the merge spawned on the base branch.
+func fetchPostMerge(ctx context.Context, repo, sha string) (State, string) {
+	var checks []ghCheck
+	out, err := run(ctx, "gh", "api", fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100", repo, sha))
+	if err != nil {
+		return Unknown, err.Error()
+	}
+	var runs struct {
+		CheckRuns []struct {
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+		} `json:"check_runs"`
+	}
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return Unknown, err.Error()
+	}
+	for _, c := range runs.CheckRuns {
+		checks = append(checks, ghCheck{Status: strings.ToUpper(c.Status), Conclusion: strings.ToUpper(c.Conclusion)})
+	}
+	if out, err := run(ctx, "gh", "api", fmt.Sprintf("repos/%s/commits/%s/status", repo, sha)); err == nil {
+		var st struct {
+			Statuses []struct {
+				State string `json:"state"`
+			} `json:"statuses"`
+		}
+		if json.Unmarshal(out, &st) == nil {
+			for _, s := range st.Statuses {
+				checks = append(checks, ghCheck{Typename: "StatusContext", State: strings.ToUpper(s.State)})
+			}
+		}
+	}
+	return rollup(checks)
+}
+
+func rollup(checks []ghCheck) (State, string) {
+	if len(checks) == 0 {
 		return Unknown, "no checks"
 	}
 	pending, failed := 0, 0
-	for _, c := range p.StatusCheckRollup {
+	for _, c := range checks {
 		if c.Typename == "StatusContext" {
 			switch c.State {
 			case "SUCCESS":
@@ -163,7 +212,7 @@ func rollup(p ghPR) (State, string) {
 			continue
 		}
 		switch c.Conclusion {
-		case "SUCCESS", "NEUTRAL", "SKIPPED":
+		case "SUCCESS", "NEUTRAL", "SKIPPED", "CANCELLED": // cancelled is usually a superseded run, not a failure
 		default:
 			failed++
 		}

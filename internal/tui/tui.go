@@ -319,7 +319,7 @@ func (m Model) View() string {
 
 func (m Model) row(t task.Task, selected bool) string {
 	r, have := m.results[t.ID]
-	icons := "○ ○ ○ ○ "
+	icons := "○ ○ ○ ○ ○ "
 	mark := " "
 	title := ""
 	if have {
@@ -327,8 +327,8 @@ func (m Model) row(t task.Task, selected bool) string {
 		if r.PR != nil {
 			pr = *r.PR
 		}
-		icons = fmt.Sprintf("%s %s %s %s ", icon(m.jiraState(r)),
-			icon(pr.Approval), icon(pr.CI), icon(pr.Merge))
+		icons = fmt.Sprintf("%s %s %s %s %s ", icon(m.jiraState(r)),
+			icon(pr.Approval), icon(pr.CI), icon(pr.Merge), icon(pr.Post))
 		if m.allGood(r) {
 			mark = green.Render("✓")
 		}
@@ -354,8 +354,8 @@ func (m Model) row(t task.Task, selected bool) string {
 		idw = max(idw, lipgloss.Width(o.ID))
 	}
 	id := dim.Render(fmt.Sprintf("%*s", idw, t.ID)) + " "
-	// layout: caret(2) icons(8) mark(2) id(idw+1) name title(rest) repo
-	fixed := 2 + lipgloss.Width(name) + 1 + 8 + 2 + idw + 1 + lipgloss.Width(repo)
+	// layout: caret(2) icons(10) mark(2) id(idw+1) name title(rest) repo
+	fixed := 2 + lipgloss.Width(name) + 1 + 10 + 2 + idw + 1 + lipgloss.Width(repo)
 	avail := m.w - fixed
 	if avail > 3 && title != "" {
 		title = " " + dim.Render(trunc(title, avail-1))
@@ -388,6 +388,9 @@ func (m Model) detailView(t task.Task) string {
 		if r.PR != nil {
 			add("PR  ", t.PR+"  "+r.PR.Title)
 			add("    ", fmt.Sprintf("review: %s · ci: %s · merge: %s", r.PR.ApprovalText, r.PR.CIText, r.PR.MergeText))
+			if r.PR.Merged {
+				add("    ", "post-merge: "+r.PR.PostText)
+			}
 			add("    ", "branch: "+r.PR.Branch)
 		} else if r.PRErr != nil {
 			add("PR  ", red.Render(r.PRErr.Error()))
