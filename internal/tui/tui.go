@@ -19,6 +19,7 @@ import (
 type (
 	pollMsg       struct{}
 	reloadMsg     struct{}
+	spinMsg       struct{}
 	resumeDoneMsg struct{ err error }
 	openDoneMsg   struct{ err error }
 	resultMsg     struct {
@@ -46,6 +47,7 @@ type Model struct {
 	field     task.Field // field being edited in modeEdit
 	input     []rune
 	w, h      int
+	frame     int // spinner frame, advanced while fetches are in flight
 
 	// Archive view: browses archive.yaml, which is never polled.
 	archView   bool
@@ -75,7 +77,13 @@ func New(cfg config.Config, path, archPath string) Model {
 func fingerprint(t task.Task) string { return t.Jira + "|" + t.PR }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg { return reloadMsg{} }, pollTick(m.cfg.PollInterval), reloadTick())
+	return tea.Batch(func() tea.Msg { return reloadMsg{} }, pollTick(m.cfg.PollInterval), reloadTick(), spinTick())
+}
+
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func spinTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return spinMsg{} })
 }
 
 func pollTick(d time.Duration) tea.Cmd {
@@ -115,6 +123,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reloadMsg:
 		cmd := m.reload()
 		return m, tea.Batch(cmd, reloadTick())
+	case spinMsg:
+		if len(m.inflight) > 0 {
+			m.frame++
+		}
+		return m, spinTick()
 	case pollMsg:
 		return m, tea.Batch(m.fetchTasks(false), pollTick(m.cfg.PollInterval))
 	case resultMsg:
@@ -498,7 +511,11 @@ func (m Model) View() string {
 		return m.archiveView()
 	}
 	var b strings.Builder
-	b.WriteString(bold.Render("codestattui") + "\n")
+	b.WriteString(bold.Render("codestattui"))
+	if n := len(m.inflight); n > 0 {
+		b.WriteString(" " + cyan.Render(spinFrames[m.frame%len(spinFrames)]) + dim.Render(fmt.Sprintf(" refreshing (%d)", n)))
+	}
+	b.WriteString("\n")
 	b.WriteString(dim.Render("  J P C M D ✓") + "\n")
 	if m.loadErr != nil {
 		b.WriteString(red.Render(trunc("tasks: "+m.loadErr.Error(), m.w)) + "\n")
