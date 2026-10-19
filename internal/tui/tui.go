@@ -31,6 +31,7 @@ type (
 type Model struct {
 	cfg       config.Config
 	path      string
+	archPath  string
 	tasks     []task.Task
 	results   map[string]provider.Result
 	fetchedFP map[string]string // task id -> fingerprint of what was fetched
@@ -45,18 +46,29 @@ type Model struct {
 	field     task.Field // field being edited in modeEdit
 	input     []rune
 	w, h      int
+
+	// Archive view: browses archive.yaml, which is never polled.
+	archView   bool
+	archived   []task.Archived
+	archShown  []task.Archived // archived filtered by query, newest first
+	archCursor int
+	query      string
+
+	confirmID, confirmName string // task awaiting archive confirmation
 }
 
 type mode int
 
 const (
-	modeNormal mode = iota
-	modeUpdate      // "u" pressed; waiting for a field key
-	modeEdit        // typing a new value
+	modeNormal  mode = iota
+	modeUpdate       // "u" pressed; waiting for a field key
+	modeEdit         // typing a new value
+	modeSearch       // typing an archive search query
+	modeConfirm      // "a" pressed; waiting for y/n to archive confirmID
 )
 
-func New(cfg config.Config, path string) Model {
-	return Model{cfg: cfg, path: path, results: map[string]provider.Result{},
+func New(cfg config.Config, path, archPath string) Model {
+	return Model{cfg: cfg, path: path, archPath: archPath, results: map[string]provider.Result{},
 		fetchedFP: map[string]string{}, inflight: map[string]bool{}}
 }
 
@@ -127,6 +139,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateChord(msg)
 		case modeEdit:
 			return m.editKey(msg)
+		case modeSearch:
+			return m.searchKey(msg)
+		case modeConfirm:
+			return m.confirmKey(msg)
+		}
+		if m.archView {
+			return m.archiveKey(msg)
 		}
 		switch msg.String() {
 		case "?":
@@ -135,6 +154,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.tasks) {
 				m.mode = modeUpdate
 			}
+		case "a":
+			if m.cursor >= len(m.tasks) {
+				return m, nil
+			}
+			t := m.tasks[m.cursor]
+			m.mode, m.confirmID, m.confirmName = modeConfirm, t.ID, t.Display()
+		case "A":
+			m.openArchive()
 		case "o":
 			if m.cursor >= len(m.tasks) {
 				return m, nil
@@ -180,6 +207,116 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchTasks(false)
 		}
 	}
+	return m, nil
+}
+
+// confirmKey archives the pending task on y; any other key cancels. The task is addressed by
+// id, so a reload that shifts the cursor can't make it archive a different one.
+func (m Model) confirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	if msg.String() != "y" {
+		return m, nil
+	}
+	t, err := task.Archive(m.path, m.archPath, m.confirmID, "")
+	if err != nil {
+		m.notice = "archive failed: " + err.Error()
+		return m, nil
+	}
+	m.notice = "archived " + t.Display() + " (A to browse, U there to restore)"
+	m.mtime = time.Time{}
+	return m, m.reload()
+}
+
+// openArchive switches to the archive view, reading the archive fresh.
+func (m *Model) openArchive() {
+	arch, err := task.LoadArchive(m.archPath)
+	if err != nil {
+		m.notice = "archive: " + err.Error()
+		return
+	}
+	m.archView, m.archived, m.query, m.archCursor = true, arch, "", 0
+	m.refilter()
+}
+
+func (m *Model) refilter() {
+	m.archShown = task.SearchArchive(m.archived, m.query)
+	if m.archCursor >= len(m.archShown) {
+		m.archCursor = max(0, len(m.archShown)-1)
+	}
+}
+
+// archiveKey handles keys in the archive view.
+func (m Model) archiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "?":
+		m.help = true
+	case "esc":
+		if m.query != "" {
+			m.query = ""
+			m.refilter()
+		} else {
+			m.archView = false
+		}
+	case "A":
+		m.archView = false
+	case "/":
+		m.mode, m.input = modeSearch, []rune(m.query)
+	case "j", "w", "down":
+		if m.archCursor < len(m.archShown)-1 {
+			m.archCursor++
+		}
+	case "k", "t", "up":
+		if m.archCursor > 0 {
+			m.archCursor--
+		}
+	case "U":
+		if m.archCursor >= len(m.archShown) {
+			return m, nil
+		}
+		t, err := task.Restore(m.path, m.archPath, m.archShown[m.archCursor].ID, "")
+		if err != nil {
+			m.notice = "restore failed: " + err.Error()
+			return m, nil
+		}
+		m.notice = "restored " + t.Display()
+		arch, err := task.LoadArchive(m.archPath)
+		if err != nil {
+			m.notice = "archive: " + err.Error()
+			return m, nil
+		}
+		m.archived = arch
+		m.refilter()
+		m.mtime = time.Time{}
+		return m, m.reload()
+	}
+	return m, nil
+}
+
+// searchKey edits the archive query live. enter keeps it, esc clears it.
+func (m Model) searchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.mode, m.query = modeNormal, ""
+	case tea.KeyEnter:
+		m.mode = modeNormal
+	case tea.KeyBackspace:
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+		m.query = string(m.input)
+	case tea.KeyCtrlU:
+		m.input, m.query = nil, ""
+	case tea.KeySpace:
+		m.input = append(m.input, ' ')
+		m.query = string(m.input)
+	case tea.KeyRunes:
+		m.input = append(m.input, msg.Runes...)
+		m.query = string(m.input)
+	}
+	m.archCursor = 0
+	m.refilter()
 	return m, nil
 }
 
@@ -357,6 +494,9 @@ func (m Model) View() string {
 	if m.help {
 		return m.helpView()
 	}
+	if m.archView {
+		return m.archiveView()
+	}
 	var b strings.Builder
 	b.WriteString(bold.Render("codestattui") + "\n")
 	b.WriteString(dim.Render("  J P C M D ✓") + "\n")
@@ -380,11 +520,63 @@ func (m Model) View() string {
 	case modeUpdate:
 		b.WriteString("\n" + cyan.Render("update: ") + dim.Render(updateHelp()+" · esc cancel"))
 		return b.String()
+	case modeConfirm:
+		b.WriteString("\n" + cyan.Render("archive ") + bold.Render(m.confirmName) + cyan.Render("? ") + dim.Render("y confirm · any other key cancels"))
+		return b.String()
 	case modeEdit:
 		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
 		return b.String()
 	}
-	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
+	return b.String()
+}
+
+func (m Model) archiveView() string {
+	var b strings.Builder
+	b.WriteString(bold.Render("codestattui archive") + dim.Render(fmt.Sprintf("  %d of %d", len(m.archShown), len(m.archived))) + "\n")
+	if m.query != "" || m.mode == modeSearch {
+		b.WriteString(cyan.Render("/ ") + m.query)
+		if m.mode == modeSearch {
+			b.WriteString("█")
+		}
+		b.WriteString("\n")
+	}
+	if len(m.archShown) == 0 {
+		msg := "\nNothing archived. Press a on a task to archive it."
+		if len(m.archived) > 0 {
+			msg = "\nNo archived tasks match."
+		}
+		b.WriteString(dim.Render(msg) + "\n")
+	}
+	// Scroll so the cursor stays visible.
+	visible := max(1, m.h-5)
+	start := max(0, min(m.archCursor-visible/2, len(m.archShown)-visible))
+	for i := start; i < len(m.archShown) && i < start+visible; i++ {
+		a := m.archShown[i]
+		caret := " "
+		if i == m.archCursor {
+			caret = "▸"
+		}
+		repo := ""
+		if a.Repo != "" {
+			repo = " " + cyan.Render("("+a.Repo+")")
+		}
+		pr := ""
+		if a.PR != "" {
+			pr = " " + dim.Render(a.PR)
+		}
+		line := fmt.Sprintf("%s %s %s %s%s%s", caret, dim.Render(a.ArchivedAt.Local().Format("2006-01-02")),
+			dim.Render(a.ID), a.Display(), repo, pr)
+		b.WriteString(line + "\n")
+	}
+	if m.notice != "" {
+		b.WriteString("\n" + yellow.Render(trunc(m.notice, m.w)))
+	}
+	if m.mode == modeSearch {
+		b.WriteString("\n" + dim.Render("type to filter · enter keep · esc clear"))
+	} else {
+		b.WriteString("\n" + dim.Render("j/k move · / search · U restore · esc back · ? help · q quit"))
+	}
 	return b.String()
 }
 
@@ -410,6 +602,8 @@ func (m Model) helpView() string {
 		"  j/k or w/t  move",
 		"  enter       toggle detail",
 		"  u           update a field (" + updateHelp() + ")",
+		"  a           archive task (moves it to archive.yaml)",
+		"  A           browse archive (/ search · U restore · esc back)",
 		"  o           resume claude session",
 		"  J           open jira ticket in browser",
 		"  P           open PR in browser",
@@ -529,7 +723,7 @@ func trunc(s string, w int) string {
 	return string(r[:w-1]) + "…"
 }
 
-func Run(cfg config.Config, path string) error {
-	_, err := tea.NewProgram(New(cfg, path), tea.WithAltScreen()).Run()
+func Run(cfg config.Config, path, archPath string) error {
+	_, err := tea.NewProgram(New(cfg, path, archPath), tea.WithAltScreen()).Run()
 	return err
 }

@@ -28,6 +28,9 @@ func Dir() string {
 
 func TasksPath() string { return filepath.Join(Dir(), "tasks.yaml") }
 
+// ArchivePath is where archived tasks go, kept apart from tasks.yaml so the active list stays small.
+func ArchivePath() string { return filepath.Join(Dir(), "archive.yaml") }
+
 // Load reads config.yaml, falling back to defaults for missing file or fields.
 func Load() (Config, error) {
 	c := Default()

@@ -20,8 +20,11 @@ Usage:
   codestattui update <id|jira|pr|label> [--jira KEY|URL] [--pr URL] [--label TEXT] [--session ID] [--dir PATH]
                                     [--repo NAME]   (selects among tasks sharing a ticket)
   codestattui rm <id|jira|pr|label> [--repo NAME]
+  codestattui archive <id|jira|pr|label> [--repo NAME]     move a task out of the active list
+  codestattui unarchive <id|jira|pr|label> [--repo NAME]   bring it back
+  codestattui archived [search words...]                   list/search archived tasks
 
-Files live in $CODESTATTUI_HOME or ~/.config/codestattui (tasks.yaml, config.yaml).
+Files live in $CODESTATTUI_HOME or ~/.config/codestattui (tasks.yaml, archive.yaml, config.yaml).
 `
 
 func main() {
@@ -32,13 +35,13 @@ func main() {
 }
 
 func run(args []string) error {
-	path := config.TasksPath()
+	path, archivePath := config.TasksPath(), config.ArchivePath()
 	if len(args) == 0 {
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("config.yaml: %w", err)
 		}
-		return tui.Run(cfg, path)
+		return tui.Run(cfg, path, archivePath)
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -144,6 +147,34 @@ func run(args []string) error {
 			return err
 		}
 		return task.Save(path, append(tasks[:i], tasks[i+1:]...))
+	case "archive", "unarchive":
+		if len(args) < 2 {
+			return fmt.Errorf("%s needs a task id, jira key, or PR", args[0])
+		}
+		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+		repo := fs.String("repo", "", "select the task in this repo")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		move := task.Archive
+		if args[0] == "unarchive" {
+			move = task.Restore
+		}
+		t, err := move(path, archivePath, args[1], *repo)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%sd %s (%s)\n", args[0], t.ID, t.Display())
+		return nil
+	case "archived":
+		arch, err := task.LoadArchive(archivePath)
+		if err != nil {
+			return err
+		}
+		for _, a := range task.SearchArchive(arch, strings.Join(args[1:], " ")) {
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.ArchivedAt.Local().Format("2006-01-02"), a.Jira, a.Repo, a.PR, a.Label, a.Session)
+		}
+		return nil
 	}
 	return fmt.Errorf("unknown command %q\n\n%s", args[0], strings.TrimSpace(usage))
 }

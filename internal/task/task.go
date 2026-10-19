@@ -88,11 +88,13 @@ func Load(path string) ([]Task, error) {
 }
 
 // Save writes atomically (temp file + rename) so a running app never reads a partial file.
-func Save(path string, tasks []Task) error {
+func Save(path string, tasks []Task) error { return writeAtomic(path, file{Tasks: tasks}) }
+
+func writeAtomic(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	b, err := yaml.Marshal(file{Tasks: tasks})
+	b, err := yaml.Marshal(v)
 	if err != nil {
 		return err
 	}
