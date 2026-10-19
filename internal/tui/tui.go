@@ -38,8 +38,19 @@ type Model struct {
 	notice    string
 	cursor    int
 	detail    bool
+	mode      mode
+	field     task.Field // field being edited in modeEdit
+	input     []rune
 	w, h      int
 }
+
+type mode int
+
+const (
+	modeNormal mode = iota
+	modeUpdate      // "u" pressed; waiting for a field key
+	modeEdit        // typing a new value
+)
 
 func New(cfg config.Config, path string) Model {
 	return Model{cfg: cfg, path: path, results: map[string]provider.Result{},
@@ -102,7 +113,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchTasks(false)
 	case tea.KeyMsg:
 		m.notice = ""
+		switch m.mode {
+		case modeUpdate:
+			return m.updateChord(msg)
+		case modeEdit:
+			return m.editKey(msg)
+		}
 		switch msg.String() {
+		case "u":
+			if m.cursor < len(m.tasks) {
+				m.mode = modeUpdate
+			}
 		case "o":
 			if m.cursor >= len(m.tasks) {
 				return m, nil
@@ -117,11 +138,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "j", "down":
+		case "j", "w", "down":
 			if m.cursor < len(m.tasks)-1 {
 				m.cursor++
 			}
-		case "k", "up":
+		case "k", "t", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
@@ -134,6 +155,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// updateChord handles the key after "u", choosing which field to edit.
+func (m Model) updateChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	f, ok := task.FieldByKey(msg.String())
+	if !ok {
+		if msg.String() != "esc" {
+			m.notice = "no field bound to " + msg.String()
+		}
+		return m, nil
+	}
+	m.mode, m.field = modeEdit, f
+	m.input = []rune(f.Get(m.tasks[m.cursor]))
+	return m, nil
+}
+
+// editKey handles typing into the value prompt. enter saves, esc cancels; an empty value clears the field.
+func (m Model) editKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.mode = modeNormal
+	case tea.KeyEnter:
+		m.mode = modeNormal
+		if err := task.UpdateField(m.path, m.tasks[m.cursor].ID, m.field, string(m.input)); err != nil {
+			m.notice = "update failed: " + err.Error()
+			return m, nil
+		}
+		m.mtime = time.Time{} // force reload; it refetches if jira/pr changed
+		return m, m.reload()
+	case tea.KeyBackspace:
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+	case tea.KeyCtrlU:
+		m.input = nil
+	case tea.KeySpace:
+		m.input = append(m.input, ' ')
+	case tea.KeyRunes:
+		m.input = append(m.input, msg.Runes...)
+	}
+	return m, nil
+}
+
+// updateHelp lists the chord keys, generated from task.Fields.
+func updateHelp() string {
+	var parts []string
+	for _, f := range task.Fields {
+		parts = append(parts, f.Key+"="+f.Name)
+	}
+	return strings.Join(parts, " ")
 }
 
 // reload re-reads tasks.yaml if it changed on disk.
@@ -168,6 +240,7 @@ var (
 	green  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	red    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	cyan   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	bold   = lipgloss.NewStyle().Bold(true)
 )
@@ -232,7 +305,15 @@ func (m Model) View() string {
 	if m.notice != "" {
 		b.WriteString("\n" + yellow.Render(trunc(m.notice, m.w)))
 	}
-	b.WriteString("\n" + dim.Render("j/k move · enter detail · o resume claude · r refresh · q quit"))
+	switch m.mode {
+	case modeUpdate:
+		b.WriteString("\n" + cyan.Render("update: ") + dim.Render(updateHelp()+" · esc cancel"))
+		return b.String()
+	case modeEdit:
+		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
+		return b.String()
+	}
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · o resume claude · r refresh · q quit"))
 	return b.String()
 }
 
@@ -264,14 +345,20 @@ func (m Model) row(t task.Task, selected bool) string {
 		mark = dim.Render("…")
 	}
 	name := t.Display()
+	repo := ""
 	if t.Repo != "" {
-		name += " " + dim.Render(t.Repo)
+		repo = " " + cyan.Render("("+t.Repo+")")
 	}
-	// layout: caret(2) icons(8) mark(2) name title(rest)
-	fixed := 2 + lipgloss.Width(name) + 1 + 8 + 2
+	idw := 0 // pad ids to the widest so labels stay aligned
+	for _, o := range m.tasks {
+		idw = max(idw, lipgloss.Width(o.ID))
+	}
+	id := dim.Render(fmt.Sprintf("%*s", idw, t.ID)) + " "
+	// layout: caret(2) icons(8) mark(2) id(idw+1) name title(rest) repo
+	fixed := 2 + lipgloss.Width(name) + 1 + 8 + 2 + idw + 1 + lipgloss.Width(repo)
 	avail := m.w - fixed
 	if avail > 3 && title != "" {
-		title = dim.Render(trunc(title, avail))
+		title = " " + dim.Render(trunc(title, avail-1))
 	} else {
 		title = ""
 	}
@@ -279,7 +366,7 @@ func (m Model) row(t task.Task, selected bool) string {
 	if selected {
 		caret = "▸"
 	}
-	return fmt.Sprintf("%s %s%s %s %s", caret, icons, mark, name, title)
+	return fmt.Sprintf("%s %s%s %s%s%s%s", caret, icons, mark, id, name, title, repo)
 }
 
 func (m Model) detailView(t task.Task) string {

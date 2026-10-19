@@ -204,3 +204,51 @@ func Normalize(t *Task) error {
 	}
 	return nil
 }
+
+// Field is an editable task attribute. The TUI builds its "u<key>" update chords from Fields,
+// so adding a field here (plus the struct member) makes it editable there too. Keys must be unique.
+type Field struct {
+	Key  string // second key of the chord, e.g. "l" for "ul"
+	Name string
+	Get  func(Task) string
+	Set  func(*Task, string)
+}
+
+var Fields = []Field{
+	{"l", "label", func(t Task) string { return t.Label }, func(t *Task, v string) { t.Label = v }},
+	{"j", "jira", func(t Task) string { return t.Jira }, func(t *Task, v string) { t.Jira = v }},
+	{"p", "pr", func(t Task) string { return t.PR }, func(t *Task, v string) { t.PR = v }},
+	{"s", "session", func(t Task) string { return t.Session }, func(t *Task, v string) { t.Session = v }},
+	{"d", "dir", func(t Task) string { return t.Dir }, func(t *Task, v string) { t.Dir = v }},
+	{"r", "repo", func(t Task) string { return t.Repo }, func(t *Task, v string) { t.Repo = v }},
+}
+
+// FieldByKey returns the field bound to a chord key.
+func FieldByKey(key string) (Field, bool) {
+	for _, f := range Fields {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return Field{}, false
+}
+
+// UpdateField sets one field on the task with the given id and saves. The file is re-read first
+// so edits made by the CLI since the last reload aren't clobbered.
+func UpdateField(path, id string, f Field, value string) error {
+	tasks, err := Load(path)
+	if err != nil {
+		return err
+	}
+	i, err := Find(tasks, id, "")
+	if err != nil {
+		return err
+	}
+	t := tasks[i]
+	f.Set(&t, strings.TrimSpace(value))
+	if err := Normalize(&t); err != nil {
+		return err
+	}
+	tasks[i] = t
+	return Save(path, tasks)
+}
