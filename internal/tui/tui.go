@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ type (
 	pollMsg       struct{}
 	reloadMsg     struct{}
 	resumeDoneMsg struct{ err error }
+	openDoneMsg   struct{ err error }
 	resultMsg     struct {
 		id  string
 		fp  string
@@ -38,6 +40,7 @@ type Model struct {
 	notice    string
 	cursor    int
 	detail    bool
+	help      bool
 	mode      mode
 	field     task.Field // field being edited in modeEdit
 	input     []rune
@@ -111,8 +114,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "resume failed: " + msg.err.Error()
 		}
 		return m, m.fetchTasks(false)
+	case openDoneMsg:
+		m.notice = "open failed: " + msg.err.Error()
 	case tea.KeyMsg:
 		m.notice = ""
+		if m.help { // any key dismisses help
+			m.help = false
+			return m, nil
+		}
 		switch m.mode {
 		case modeUpdate:
 			return m.updateChord(msg)
@@ -120,6 +129,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.editKey(msg)
 		}
 		switch msg.String() {
+		case "?":
+			m.help = true
 		case "u":
 			if m.cursor < len(m.tasks) {
 				m.mode = modeUpdate
@@ -136,6 +147,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c := exec.Command("claude", "--resume", t.Session)
 			c.Dir = t.Dir
 			return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
+		case "J":
+			key := m.jiraKey()
+			if key == "" {
+				m.notice = "no jira ticket on this task"
+				return m, nil
+			}
+			// acli opens the ticket on the site it is logged in to.
+			return m, openCmd("acli", "jira", "workitem", "view", key, "--web")
+		case "P":
+			url := m.prLink()
+			if url == "" {
+				m.notice = "no PR on this task"
+				return m, nil
+			}
+			return m, openCmd(opener(), url)
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "j", "w", "down":
@@ -155,6 +181,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// jiraKey is the selected task's ticket key ("" if none), falling back to one found from the PR.
+func (m Model) jiraKey() string {
+	if m.cursor >= len(m.tasks) {
+		return ""
+	}
+	t := m.tasks[m.cursor]
+	if t.Jira != "" {
+		return t.Jira
+	}
+	return m.results[t.ID].JiraKey
+}
+
+// prLink is the GitHub URL of the selected task's PR ("" if none).
+func (m Model) prLink() string {
+	if m.cursor >= len(m.tasks) {
+		return ""
+	}
+	repo, n := task.SplitPR(m.tasks[m.cursor].PR)
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
+}
+
+func opener() string {
+	if runtime.GOOS == "darwin" {
+		return "open"
+	}
+	return "xdg-open"
+}
+
+// openCmd runs a browser-opening command in the background and reports failure as a notice.
+func openCmd(name string, args ...string) tea.Cmd {
+	return func() tea.Msg {
+		if err := exec.Command(name, args...).Run(); err != nil {
+			return openDoneMsg{err}
+		}
+		return nil
+	}
 }
 
 // updateChord handles the key after "u", choosing which field to edit.
@@ -287,8 +354,12 @@ func (m Model) View() string {
 	if m.w == 0 {
 		return ""
 	}
+	if m.help {
+		return m.helpView()
+	}
 	var b strings.Builder
-	b.WriteString(bold.Render("codestattui") + dim.Render("  J=jira P=review C=ci M=merge ✓=ready\n● ok  ◐ pending  ✖ failing  ○ n/a") + "\n")
+	b.WriteString(bold.Render("codestattui") + "\n")
+	b.WriteString(dim.Render("  J P C M D ✓") + "\n")
 	if m.loadErr != nil {
 		b.WriteString(red.Render(trunc("tasks: "+m.loadErr.Error(), m.w)) + "\n")
 	}
@@ -313,8 +384,42 @@ func (m Model) View() string {
 		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
 		return b.String()
 	}
-	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · o resume claude · r refresh · q quit"))
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
 	return b.String()
+}
+
+func (m Model) helpView() string {
+	rows := []string{
+		bold.Render("Columns"),
+		"  J  jira ticket is in a ready status",
+		"  P  PR review / approval",
+		"  C  PR CI checks",
+		"  M  PR is mergeable",
+		"  D  all checks on the merge commit (after merge)",
+		"  ✓  everything is ready to merge",
+		"",
+		bold.Render("Symbols"),
+		"  " + icon(provider.Good) + "  ok",
+		"  " + icon(provider.Pending) + "  pending",
+		"  " + icon(provider.Bad) + "  failing",
+		"  " + icon(provider.Unknown) + "  n/a",
+		"  " + red.Render("!") + "  error fetching jira or PR",
+		"  " + dim.Render("…") + "  loading",
+		"",
+		bold.Render("Keys"),
+		"  j/k or w/t  move",
+		"  enter       toggle detail",
+		"  u           update a field (" + updateHelp() + ")",
+		"  o           resume claude session",
+		"  J           open jira ticket in browser",
+		"  P           open PR in browser",
+		"  r           refresh",
+		"  ?           this help",
+		"  q           quit",
+		"",
+		dim.Render("press any key to close"),
+	}
+	return bold.Render("codestattui help") + "\n\n" + strings.Join(rows, "\n")
 }
 
 func (m Model) row(t task.Task, selected bool) string {
