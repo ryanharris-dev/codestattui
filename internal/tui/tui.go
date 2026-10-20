@@ -197,7 +197,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notice = "no Claude session on this task (add with --session)"
 				return m, nil
 			}
-			c := exec.Command("claude", "--resume", t.Session)
+			c := exec.Command("claude", "--resume", t.Session, "--remote-control")
 			c.Dir = t.Dir
 			if id := os.Getenv("KITTY_WINDOW_ID"); id != "" {
 				return m, kittySplitCmd(id, t, c)
@@ -433,7 +433,7 @@ func kittySplitCmd(windowID string, t task.Task, fallback *exec.Cmd) tea.Cmd {
 	if t.Dir != "" {
 		args = append(args, "--cwd="+t.Dir)
 	}
-	args = append(args, "claude", "--resume", t.Session)
+	args = append(args, "claude", "--resume", t.Session, "--remote-control")
 	// kitten @ talks to kitty over /dev/tty, so it must run with the terminal released from bubbletea.
 	var stderr bytes.Buffer
 	c := exec.Command("kitten", args...)
@@ -727,7 +727,7 @@ func (m Model) helpView() string {
 		"  u           update a field (" + updateHelp() + ")",
 		"  a           archive task (moves it to archive.yaml)",
 		"  A           browse archive (/ search · U restore · esc back)",
-		"  o           resume claude session",
+		"  o           resume claude session (remote control on)",
 		"  J           open jira ticket in browser",
 		"  P           open PR in browser",
 		"  r           refresh",
