@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -22,7 +23,12 @@ type (
 	spinMsg       struct{}
 	resumeDoneMsg struct{ err error }
 	openDoneMsg   struct{ err error }
-	resultMsg     struct {
+	// splitDoneMsg reports a kitty split launch; on failure the resume falls back to running in place.
+	splitDoneMsg struct {
+		err error
+		c   *exec.Cmd
+	}
+	resultMsg struct {
 		id  string
 		fp  string
 		res provider.Result
@@ -139,6 +145,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "resume failed: " + msg.err.Error()
 		}
 		return m, m.fetchTasks(false)
+	case splitDoneMsg:
+		if msg.err != nil {
+			m.notice = "kitty split failed, resuming in place: " + msg.err.Error()
+			return m, tea.ExecProcess(msg.c, func(err error) tea.Msg { return resumeDoneMsg{err} })
+		}
 	case openDoneMsg:
 		m.notice = "open failed: " + msg.err.Error()
 	case tea.KeyMsg:
@@ -186,6 +197,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			c := exec.Command("claude", "--resume", t.Session)
 			c.Dir = t.Dir
+			if id := os.Getenv("KITTY_WINDOW_ID"); id != "" {
+				return m, kittySplitCmd(id, t, c)
+			}
 			return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
 		case "J":
 			key := m.jiraKey()
@@ -372,6 +386,29 @@ func openCmd(name string, args ...string) tea.Cmd {
 		}
 		return nil
 	}
+}
+
+// kittySplitCmd resumes the session in a new kitty window beside the TUI (the tall layout puts new
+// windows to the right). It needs allow_remote_control in kitty.conf; fallback is the in-place command.
+func kittySplitCmd(windowID string, t task.Task, fallback *exec.Cmd) tea.Cmd {
+	args := []string{"@", "launch", "--type=window", "--location=vsplit", "--match=window_id:" + windowID}
+	if t.Dir != "" {
+		args = append(args, "--cwd="+t.Dir)
+	}
+	args = append(args, "claude", "--resume", t.Session)
+	// kitten @ talks to kitty over /dev/tty, so it must run with the terminal released from bubbletea.
+	var stderr bytes.Buffer
+	c := exec.Command("kitten", args...)
+	c.Stderr = &stderr
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+				err = fmt.Errorf("%s", msg)
+			}
+			return splitDoneMsg{err, fallback}
+		}
+		return nil
+	})
 }
 
 // updateChord handles the key after "u", choosing which field to edit.
