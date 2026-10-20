@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type Model struct {
 	notice    string
 	cursor    int
 	detail    bool
+	byRepo    bool // group the list into per-repo sections
 	help      bool
 	mode      mode
 	field     task.Field // field being edited in modeEdit
@@ -182,7 +184,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= len(m.tasks) {
 				return m, nil
 			}
-			t := m.tasks[m.cursor]
+			t := m.ordered()[m.cursor]
 			m.mode, m.confirmID, m.confirmName = modeConfirm, t.ID, t.Display()
 		case "A":
 			m.openArchive()
@@ -190,7 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= len(m.tasks) {
 				return m, nil
 			}
-			t := m.tasks[m.cursor]
+			t := m.ordered()[m.cursor]
 			if t.Session == "" {
 				m.notice = "no Claude session on this task (add with --session)"
 				return m, nil
@@ -225,6 +227,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "k", "t", "up":
 			if m.cursor > 0 {
 				m.cursor--
+			}
+		case "g":
+			// Keep the same task selected across the reorder.
+			var id string
+			if m.cursor < len(m.tasks) {
+				id = m.ordered()[m.cursor].ID
+			}
+			m.byRepo = !m.byRepo
+			for i, t := range m.ordered() {
+				if t.ID == id {
+					m.cursor = i
+				}
 			}
 		case "enter":
 			m.detail = !m.detail
@@ -347,12 +361,36 @@ func (m Model) searchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ordered is the tasks in display order: file order, or grouped by repo (alphabetical,
+// tasks without a repo last) when byRepo is set. The cursor indexes this slice.
+func (m Model) ordered() []task.Task {
+	if !m.byRepo {
+		return m.tasks
+	}
+	out := append([]task.Task(nil), m.tasks...)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].Repo, out[j].Repo
+		if (a == "") != (b == "") {
+			return b == ""
+		}
+		return strings.ToLower(a) < strings.ToLower(b)
+	})
+	return out
+}
+
+func repoHeading(repo string) string {
+	if repo == "" {
+		return "no repo"
+	}
+	return repo
+}
+
 // jiraKey is the selected task's ticket key ("" if none), falling back to one found from the PR.
 func (m Model) jiraKey() string {
 	if m.cursor >= len(m.tasks) {
 		return ""
 	}
-	t := m.tasks[m.cursor]
+	t := m.ordered()[m.cursor]
 	if t.Jira != "" {
 		return t.Jira
 	}
@@ -364,7 +402,7 @@ func (m Model) prLink() string {
 	if m.cursor >= len(m.tasks) {
 		return ""
 	}
-	repo, n := task.SplitPR(m.tasks[m.cursor].PR)
+	repo, n := task.SplitPR(m.ordered()[m.cursor].PR)
 	if n == 0 {
 		return ""
 	}
@@ -422,7 +460,7 @@ func (m Model) updateChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mode, m.field = modeEdit, f
-	m.input = []rune(f.Get(m.tasks[m.cursor]))
+	m.input = []rune(f.Get(m.ordered()[m.cursor]))
 	return m, nil
 }
 
@@ -433,7 +471,7 @@ func (m Model) editKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 	case tea.KeyEnter:
 		m.mode = modeNormal
-		if err := task.UpdateField(m.path, m.tasks[m.cursor].ID, m.field, string(m.input)); err != nil {
+		if err := task.UpdateField(m.path, m.ordered()[m.cursor].ID, m.field, string(m.input)); err != nil {
 			m.notice = "update failed: " + err.Error()
 			return m, nil
 		}
@@ -581,11 +619,19 @@ func (m Model) View() string {
 		b.WriteString(dim.Render("\nNo tasks. Add one:\n  codestattui add --jira ABC-1 --pr owner/repo#2"))
 		return b.String()
 	}
-	for i, t := range m.tasks {
+	prev := "\x00"
+	for i, t := range m.ordered() {
+		if m.byRepo && t.Repo != prev {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(bold.Render(repoHeading(t.Repo)) + "\n")
+			prev = t.Repo
+		}
 		b.WriteString(m.row(t, i == m.cursor) + "\n")
 	}
 	if m.detail && m.cursor < len(m.tasks) {
-		b.WriteString("\n" + m.detailView(m.tasks[m.cursor]))
+		b.WriteString("\n" + m.detailView(m.ordered()[m.cursor]))
 	}
 	if m.notice != "" {
 		b.WriteString("\n" + yellow.Render(trunc(m.notice, m.w)))
@@ -601,7 +647,7 @@ func (m Model) View() string {
 		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
 		return b.String()
 	}
-	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · g group by repo · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
 	return b.String()
 }
 
@@ -677,6 +723,7 @@ func (m Model) helpView() string {
 		bold.Render("Keys"),
 		"  j/k or w/t  move",
 		"  enter       toggle detail",
+		"  g           toggle grouping by repo",
 		"  u           update a field (" + updateHelp() + ")",
 		"  a           archive task (moves it to archive.yaml)",
 		"  A           browse archive (/ search · U restore · esc back)",
@@ -723,7 +770,7 @@ func (m Model) row(t task.Task, selected bool) string {
 	}
 	name := t.Display()
 	repo := ""
-	if t.Repo != "" {
+	if t.Repo != "" && !m.byRepo {
 		repo = " " + cyan.Render("("+t.Repo+")")
 	}
 	idw := 0 // pad ids to the widest so labels stay aligned
