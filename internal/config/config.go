@@ -11,10 +11,11 @@ import (
 type Config struct {
 	PollInterval  time.Duration `yaml:"poll_interval"`
 	ReadyStatuses []string      `yaml:"ready_statuses"`
+	QAStatuses    []string      `yaml:"qa_statuses"`
 }
 
 func Default() Config {
-	return Config{PollInterval: 60 * time.Second, ReadyStatuses: []string{"QA Approved"}}
+	return Config{PollInterval: 60 * time.Second, ReadyStatuses: []string{"QA Approved"}, QAStatuses: []string{"Ready for QA"}}
 }
 
 // Dir returns the config directory, honoring CODESTATTUI_HOME.
@@ -49,6 +50,9 @@ func Load() (Config, error) {
 	}
 	if len(c.ReadyStatuses) == 0 {
 		c.ReadyStatuses = Default().ReadyStatuses
+	}
+	if len(c.QAStatuses) == 0 {
+		c.QAStatuses = Default().QAStatuses
 	}
 	return c, nil
 }

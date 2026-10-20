@@ -484,13 +484,26 @@ func (m Model) jiraState(r provider.Result) provider.State {
 	return provider.Pending
 }
 
-func (m Model) isReady(status string) bool {
-	for _, s := range m.cfg.ReadyStatuses {
+func (m Model) isReady(status string) bool { return containsFold(m.cfg.ReadyStatuses, status) }
+
+// isInQA: the ticket is waiting on QA, which is distinct from merely pending.
+func (m Model) isInQA(status string) bool { return containsFold(m.cfg.QAStatuses, status) }
+
+func containsFold(list []string, status string) bool {
+	for _, s := range list {
 		if strings.EqualFold(s, status) {
 			return true
 		}
 	}
 	return false
+}
+
+// jiraIcon is the J column: the usual state icon, but a cyan diamond while in QA.
+func (m Model) jiraIcon(r provider.Result) string {
+	if r.Jira != nil && !m.isReady(r.Jira.Status) && m.isInQA(r.Jira.Status) {
+		return cyan.Render("◆")
+	}
+	return icon(m.jiraState(r))
 }
 
 // allGood: ticket in a ready status and the PR is approved, green, and mergeable.
@@ -611,6 +624,7 @@ func (m Model) helpView() string {
 		"  " + icon(provider.Good) + "  ok",
 		"  " + icon(provider.Pending) + "  pending",
 		"  " + icon(provider.Bad) + "  failing",
+		"  " + cyan.Render("◆") + "  jira ticket is ready for QA (J column)",
 		"  " + icon(provider.Unknown) + "  n/a",
 		"  " + red.Render("!") + "  error fetching jira or PR",
 		"  " + dim.Render("…") + "  loading",
@@ -643,7 +657,7 @@ func (m Model) row(t task.Task, selected bool) string {
 		if r.PR != nil {
 			pr = *r.PR
 		}
-		icons = fmt.Sprintf("%s %s %s %s %s ", icon(m.jiraState(r)),
+		icons = fmt.Sprintf("%s %s %s %s %s ", m.jiraIcon(r),
 			icon(pr.Approval), icon(pr.CI), icon(pr.Merge), icon(pr.Post))
 		if m.allGood(r) {
 			mark = green.Render("✓")
