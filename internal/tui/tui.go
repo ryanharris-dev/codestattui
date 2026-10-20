@@ -550,6 +550,13 @@ func (m Model) allGood(r provider.Result) bool {
 		r.PR.Approval == provider.Good && r.PR.CI == provider.Good && r.PR.Merge == provider.Good
 }
 
+// complete: the PR is merged, the ticket is in a ready status, and the post-merge checks
+// haven't failed or are still running, so the task can be archived.
+func (m Model) complete(r provider.Result) bool {
+	return r.Jira != nil && r.PR != nil && r.PR.Merged && m.isReady(r.Jira.Status) &&
+		r.PR.Post != provider.Bad && r.PR.Post != provider.Pending
+}
+
 func (m Model) View() string {
 	if m.w == 0 {
 		return ""
@@ -656,6 +663,7 @@ func (m Model) helpView() string {
 		"  M  PR is mergeable",
 		"  D  all checks on the merge commit (after merge)",
 		"  ✓  everything is ready to merge",
+		"  ★  merged and ticket ready; safe to archive",
 		"",
 		bold.Render("Symbols"),
 		"  " + icon(provider.Good) + "  ok",
@@ -696,7 +704,9 @@ func (m Model) row(t task.Task, selected bool) string {
 		}
 		icons = fmt.Sprintf("%s %s %s %s %s ", m.jiraIcon(r),
 			icon(pr.Approval), icon(pr.CI), icon(pr.Merge), icon(pr.Post))
-		if m.allGood(r) {
+		if m.complete(r) {
+			mark = green.Render("★")
+		} else if m.allGood(r) {
 			mark = green.Render("✓")
 		}
 		switch {
