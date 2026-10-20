@@ -573,7 +573,7 @@ func (m Model) View() string {
 		b.WriteString(" " + cyan.Render(spinFrames[m.frame%len(spinFrames)]) + dim.Render(fmt.Sprintf(" refreshing (%d)", n)))
 	}
 	b.WriteString("\n")
-	b.WriteString(dim.Render("  J P C M D ✓") + "\n")
+	b.WriteString(dim.Render("  J C P M D ✓") + "\n")
 	if m.loadErr != nil {
 		b.WriteString(red.Render(trunc("tasks: "+m.loadErr.Error(), m.w)) + "\n")
 	}
@@ -658,8 +658,8 @@ func (m Model) helpView() string {
 	rows := []string{
 		bold.Render("Columns"),
 		"  J  jira ticket is in a ready status",
-		"  P  PR review / approval",
 		"  C  PR CI checks",
+		"  P  PR review / approval",
 		"  M  PR is mergeable",
 		"  D  all checks on the merge commit (after merge)",
 		"  ✓  everything is ready to merge",
@@ -703,7 +703,7 @@ func (m Model) row(t task.Task, selected bool) string {
 			pr = *r.PR
 		}
 		icons = fmt.Sprintf("%s %s %s %s %s ", m.jiraIcon(r),
-			icon(pr.Approval), icon(pr.CI), icon(pr.Merge), icon(pr.Post))
+			icon(pr.CI), icon(pr.Approval), icon(pr.Merge), icon(pr.Post))
 		if m.complete(r) {
 			mark = green.Render("★")
 		} else if m.allGood(r) {
