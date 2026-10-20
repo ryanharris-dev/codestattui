@@ -4,6 +4,8 @@ A lightweight terminal dashboard that shows the status of your in-flight tasks a
 
 Tasks live in a plain YAML file, so you (or an AI agent) can add, update, and remove them from the CLI while the TUI is open. The TUI picks up changes within a couple of seconds.
 
+![The codestattui main interface](docs/images/main-interface.png)
+
 ## Requirements
 
 ### To run
@@ -243,6 +245,10 @@ A spinner next to the title shows how many tasks are being refreshed.
 | `?` | Show help (any key closes it) |
 | `q` / `ctrl+c` | Quit |
 
+Press `?` at any time to see these keys in the TUI:
+
+![The in-app help screen](docs/images/help-section.png)
+
 Update field keys (press `u` first):
 
 | Key | Field |
@@ -259,6 +265,8 @@ While typing a value: `backspace` deletes, `ctrl+u` clears the input, `enter` sa
 ### Detail panel
 
 Pressing `enter` on a task shows:
+
+![The detail panel for a selected task](docs/images/detail-pane.png)
 
 - **JIRA**: key, current status, and summary
 - **PR**: title, review state, CI summary (for example `2 failing`, `1 running`, `passing`), merge state (`can merge`, `conflict`, `behind base`, `blocked`, `checking`, `merged`), post-merge deploy status once merged, and the branch name
