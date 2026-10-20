@@ -704,35 +704,56 @@ func (m Model) detailView(t task.Task) string {
 	if !ok {
 		return dim.Render("loading…")
 	}
+	const pad = "  "
 	var lines []string
-	add := func(k, v string) { lines = append(lines, fmt.Sprintf("%s %s", bold.Render(k), v)) }
+	section := func(name, head string) {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, bold.Render(name)+"  "+head)
+	}
+	row := func(label, v string) {
+		lines = append(lines, fmt.Sprintf("%s%s %s", pad, dim.Render(fmt.Sprintf("%-8s", label)), v))
+	}
+	status := func(label string, s provider.State, text string) {
+		lines = append(lines, fmt.Sprintf("%s%s %s %s", pad, icon(s), dim.Render(fmt.Sprintf("%-6s", label)), text))
+	}
 	if r.JiraKey != "" {
 		if r.Jira != nil {
-			add("JIRA", fmt.Sprintf("%s  %s", r.JiraKey, r.Jira.Status))
-			add("    ", r.Jira.Summary)
+			section("JIRA", cyan.Render(r.JiraKey)+dim.Render(" · ")+r.Jira.Status)
+			lines = append(lines, pad+r.Jira.Summary)
 		} else if r.JiraErr != nil {
-			add("JIRA", red.Render(r.JiraErr.Error()))
+			section("JIRA", cyan.Render(r.JiraKey))
+			lines = append(lines, pad+red.Render(r.JiraErr.Error()))
 		}
 	}
 	if t.PR != "" {
 		if r.PR != nil {
-			add("PR  ", t.PR+"  "+r.PR.Title)
-			add("    ", fmt.Sprintf("review: %s · ci: %s · merge: %s", r.PR.ApprovalText, r.PR.CIText, r.PR.MergeText))
+			section("PR", cyan.Render(t.PR))
+			lines = append(lines, pad+r.PR.Title)
+			status("review", r.PR.Approval, r.PR.ApprovalText)
+			status("ci", r.PR.CI, r.PR.CIText)
+			status("merge", r.PR.Merge, r.PR.MergeText)
 			if r.PR.Merged {
-				add("    ", "post-merge: "+r.PR.PostText)
+				status("deploy", r.PR.Post, r.PR.PostText)
 			}
-			add("    ", "branch: "+r.PR.Branch)
+			lines = append(lines, pad+dim.Render("branch  "+r.PR.Branch))
 		} else if r.PRErr != nil {
-			add("PR  ", red.Render(r.PRErr.Error()))
+			section("PR", cyan.Render(t.PR))
+			lines = append(lines, pad+red.Render(r.PRErr.Error()))
 		}
 	}
-	if t.Repo != "" {
-		add("repo", t.Repo)
+	if t.Repo != "" || t.Session != "" {
+		section("LOCAL", "")
+		if t.Repo != "" {
+			row("repo", t.Repo)
+		}
+		if t.Session != "" {
+			row("claude", t.Session)
+			row("dir", t.Dir)
+		}
 	}
-	if t.Session != "" {
-		add("claude", fmt.Sprintf("%s  (%s)", t.Session, t.Dir))
-	}
-	add("polled", r.Fetched.Format("15:04:05"))
+	lines = append(lines, "", dim.Render("polled "+r.Fetched.Format("15:04:05")))
 	return wrap(strings.Join(lines, "\n"), m.w)
 }
 
