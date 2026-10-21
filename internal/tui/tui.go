@@ -882,8 +882,12 @@ func (m Model) row(t task.Task, selected bool) string {
 		if r.PR != nil {
 			pr = *r.PR
 		}
+		review := icon(pr.Approval)
+		if pr.Draft && pr.Approval == provider.Pending && !pr.Closed && !pr.Merged {
+			review = dim.Render("◌") // a draft isn't up for review yet
+		}
 		icons = fmt.Sprintf("%s %s %s %s %s ", m.jiraIcon(r),
-			icon(pr.CI), icon(pr.Approval), icon(pr.Merge), icon(pr.Post))
+			icon(pr.CI), review, icon(pr.Merge), icon(pr.Post))
 		if m.complete(r) {
 			mark = green.Render("★")
 		} else if m.allGood(r) {
@@ -960,6 +964,9 @@ func (m Model) detailView(t task.Task) string {
 			lines = append(lines, pad+r.PR.Title)
 			status("review", r.PR.Approval, r.PR.ApprovalText)
 			status("ci", r.PR.CI, r.PR.CIText)
+			if r.PR.Draft {
+				status("state", provider.Pending, "draft")
+			}
 			status("merge", r.PR.Merge, r.PR.MergeText)
 			if r.PR.Merged {
 				status("deploy", r.PR.Post, r.PR.PostText)

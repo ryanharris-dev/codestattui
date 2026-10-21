@@ -26,6 +26,7 @@ type PRInfo struct {
 	Branch       string
 	Closed       bool
 	Merged       bool
+	Draft        bool
 	Approval     State
 	ApprovalText string
 	CI           State
@@ -95,6 +96,7 @@ type ghPR struct {
 	Title             string    `json:"title"`
 	HeadRefName       string    `json:"headRefName"`
 	State             string    `json:"state"`
+	IsDraft           bool      `json:"isDraft"`
 	ReviewDecision    string    `json:"reviewDecision"`
 	Mergeable         string    `json:"mergeable"`
 	MergeStateStatus  string    `json:"mergeStateStatus"`
@@ -119,7 +121,7 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 		return nil, fmt.Errorf("bad PR ref %q", ref)
 	}
 	out, err := run(ctx, "gh", "pr", "view", fmt.Sprint(num), "--repo", repo, "--json",
-		"title,headRefName,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,mergeCommit,reviews,reviewRequests")
+		"title,headRefName,state,isDraft,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,mergeCommit,reviews,reviewRequests")
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +129,7 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 	if err := json.Unmarshal(out, &p); err != nil {
 		return nil, err
 	}
-	info := &PRInfo{Title: p.Title, Branch: p.HeadRefName, Closed: p.State == "CLOSED", Merged: p.State == "MERGED"}
+	info := &PRInfo{Title: p.Title, Branch: p.HeadRefName, Closed: p.State == "CLOSED", Merged: p.State == "MERGED", Draft: p.IsDraft}
 
 	switch p.ReviewDecision {
 	case "APPROVED":
@@ -153,6 +155,8 @@ func FetchPR(ctx context.Context, ref string) (*PRInfo, error) {
 	case info.Merged:
 		// GitHub reports mergeable as UNKNOWN once a PR is merged.
 		info.Merge, info.MergeText = Good, "merged"
+	case info.Draft:
+		info.Merge, info.MergeText = Pending, "draft"
 	case p.Mergeable == "CONFLICTING" || p.MergeStateStatus == "DIRTY":
 		info.Merge, info.MergeText = Bad, "conflict"
 	case p.Mergeable == "UNKNOWN":
