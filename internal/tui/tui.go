@@ -76,6 +76,7 @@ const (
 	modeSearch       // typing an archive search query
 	modeConfirm      // "a" pressed; waiting for y/n to archive confirmID
 	modeSort         // "s" pressed; waiting for a sort key
+	modeOpen         // "o" pressed; waiting for what to open
 )
 
 type sortMode int
@@ -174,6 +175,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateChord(msg)
 		case modeSort:
 			return m.sortChord(msg)
+		case modeOpen:
+			return m.openChord(msg)
 		case modeEdit:
 			return m.editKey(msg)
 		case modeSearch:
@@ -202,35 +205,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "A":
 			m.openArchive()
 		case "o":
-			if m.cursor >= len(m.tasks) {
-				return m, nil
-			}
-			t := m.ordered()[m.cursor]
-			if t.Session == "" {
-				m.notice = "no Claude session on this task (add with --session)"
-				return m, nil
-			}
-			c := exec.Command("claude", "--resume", t.Session, "--remote-control")
-			c.Dir = t.Dir
-			if id := os.Getenv("KITTY_WINDOW_ID"); id != "" {
-				return m, kittySplitCmd(id, t, c)
-			}
-			return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
-		case "J":
-			key := m.jiraKey()
-			if key == "" {
-				m.notice = "no jira ticket on this task"
-				return m, nil
-			}
-			// acli opens the ticket on the site it is logged in to.
-			return m, openCmd("acli", "jira", "workitem", "view", key, "--web")
-		case "P":
-			url := m.prLink()
-			if url == "" {
-				m.notice = "no PR on this task"
-				return m, nil
-			}
-			return m, openCmd(opener(), url)
+			m.mode = modeOpen
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "j", "w", "down":
@@ -560,6 +535,47 @@ func kittySplitCmd(windowID string, t task.Task, fallback *exec.Cmd) tea.Cmd {
 	})
 }
 
+// openChord handles the key after "o", choosing what to open for the selected task.
+func (m Model) openChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	switch msg.String() {
+	case "c":
+		if m.cursor >= len(m.tasks) {
+			return m, nil
+		}
+		t := m.ordered()[m.cursor]
+		if t.Session == "" {
+			m.notice = "no Claude session on this task (add with --session)"
+			return m, nil
+		}
+		c := exec.Command("claude", "--resume", t.Session, "--remote-control")
+		c.Dir = t.Dir
+		if id := os.Getenv("KITTY_WINDOW_ID"); id != "" {
+			return m, kittySplitCmd(id, t, c)
+		}
+		return m, tea.ExecProcess(c, func(err error) tea.Msg { return resumeDoneMsg{err} })
+	case "j":
+		key := m.jiraKey()
+		if key == "" {
+			m.notice = "no jira ticket on this task"
+			return m, nil
+		}
+		// acli opens the ticket on the site it is logged in to.
+		return m, openCmd("acli", "jira", "workitem", "view", key, "--web")
+	case "p":
+		url := m.prLink()
+		if url == "" {
+			m.notice = "no PR on this task"
+			return m, nil
+		}
+		return m, openCmd(opener(), url)
+	case "esc":
+		return m, nil
+	}
+	m.notice = "nothing to open bound to " + msg.String()
+	return m, nil
+}
+
 // sortChord handles the key after "s", choosing how the list is grouped.
 func (m Model) sortChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeNormal
@@ -795,6 +811,9 @@ func (m Model) View() string {
 	case modeSort:
 		b.WriteString("\n" + cyan.Render("sort: ") + dim.Render("r=repo t=ticket/session n=none · esc cancel"))
 		return b.String()
+	case modeOpen:
+		b.WriteString("\n" + cyan.Render("open: ") + dim.Render("c=claude j=jira p=PR · esc cancel"))
+		return b.String()
 	case modeConfirm:
 		b.WriteString("\n" + cyan.Render("archive ") + bold.Render(m.confirmName) + cyan.Render("? ") + dim.Render("y confirm · any other key cancels"))
 		return b.String()
@@ -802,7 +821,7 @@ func (m Model) View() string {
 		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
 		return b.String()
 	}
-	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · s sort · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · s sort · u update · a archive · A archived · o open claude/jira/PR · r refresh · ? help · q quit"))
 	return b.String()
 }
 
@@ -882,9 +901,7 @@ func (m Model) helpView() string {
 		"  u           update a field (" + updateHelp() + ")",
 		"  a           archive task (moves it to archive.yaml)",
 		"  A           browse archive (/ search · U restore · esc back)",
-		"  o           resume claude session (remote control on)",
-		"  J           open jira ticket in browser",
-		"  P           open PR in browser",
+		"  o           open: c resume claude session (remote control on) · j jira ticket in browser · p PR in browser",
 		"  r           refresh",
 		"  ?           this help",
 		"  q           quit",

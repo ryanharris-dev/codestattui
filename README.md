@@ -13,17 +13,17 @@ Tasks live in a plain YAML file, so you (or an AI agent) can add, update, and re
 | Requirement | Why | Notes |
 | --- | --- | --- |
 | [`gh`](https://cli.github.com/) (GitHub CLI) | Fetches PR review, CI, and merge status | Run `gh auth login` first. It needs read access to the repos you track. |
-| [`acli`](https://developer.atlassian.com/cloud/acli/) (Atlassian CLI) | Fetches JIRA ticket status and summary | Must be logged in to your Atlassian site. Also used by `J` to open a ticket in the browser. |
+| [`acli`](https://developer.atlassian.com/cloud/acli/) (Atlassian CLI) | Fetches JIRA ticket status and summary | Must be logged in to your Atlassian site. Also used by `o` `j` to open a ticket in the browser. |
 | A terminal with alt-screen and Unicode support | The TUI uses `●◐✖◆○★✓` and braille spinners | Works in narrow panes such as tmux splits. |
 
 Optional:
 
 | Requirement | Used for |
 | --- | --- |
-| [`claude`](https://claude.com/claude-code) (Claude Code CLI) | `o` resumes a task's Claude session (`claude --resume <session> --remote-control`). |
-| [kitty](https://sw.kovidgoyal.net/kitty/) with `allow_remote_control` enabled in `kitty.conf` | When running inside kitty, `o` opens the session in a split beside the TUI. Without it, the session resumes in place. |
+| [`claude`](https://claude.com/claude-code) (Claude Code CLI) | `o` `c` resumes a task's Claude session (`claude --resume <session> --remote-control`). |
+| [kitty](https://sw.kovidgoyal.net/kitty/) with `allow_remote_control` enabled in `kitty.conf` | When running inside kitty, `o` `c` opens the session in a split beside the TUI. Without it, the session resumes in place. |
 | `git` | Infers a task's repo from `--dir` when `--repo` is not given. |
-| `open` (macOS) or `xdg-open` (Linux) | `P` opens the PR in your browser. |
+| `open` (macOS) or `xdg-open` (Linux) | `o` `p` opens the PR in your browser. |
 
 If you only use one data source, the other CLI is not needed for tasks that don't reference it. A task with only `--pr` needs just `gh`, unless a JIRA key can be found in the PR branch name or title.
 
@@ -107,7 +107,7 @@ Adds a task. At least one of `--jira` or `--pr` is required.
 | `--jira KEY\|URL` | JIRA key (`ABC-123`) or a browse URL containing one. |
 | `--pr URL\|owner/repo#N` | GitHub PR URL or `owner/repo#N`. Stored normalized as `owner/repo#N`. |
 | `--label TEXT` | Display name shown in the list. Defaults to the JIRA key, then the PR. |
-| `--session ID` | Claude Code session id, so `o` in the TUI can resume it. |
+| `--session ID` | Claude Code session id, so `o` `c` in the TUI can resume it. |
 | `--dir PATH` | Directory the session was started in. Defaults to the current directory when `--session` is given. Claude sessions are per-directory. |
 | `--repo NAME` | Repository the work happens in. Defaults to the repo name from `--pr`, or the git repo containing `--dir`. |
 
@@ -238,9 +238,9 @@ A spinner next to the title shows how many tasks are being refreshed.
 | `u` | Update a field of the selected task. Press `u`, then a field key (below), type the new value, and press `enter` to save or `esc` to cancel. An empty value clears the field. |
 | `a` | Archive the selected task. Press `y` to confirm, or any other key to cancel. |
 | `A` | Open the archive view |
-| `o` | Resume the task's Claude Code session with remote control. In kitty, it opens in a split beside the TUI. |
-| `J` | Open the task's JIRA ticket in the browser (via `acli`) |
-| `P` | Open the task's PR in the browser |
+| `o` then `c` | Resume the task's Claude Code session with remote control. In kitty, it opens in a split beside the TUI. |
+| `o` then `j` | Open the task's JIRA ticket in the browser (via `acli`) |
+| `o` then `p` | Open the task's PR in the browser |
 | `r` | Refresh all tasks now |
 | `?` | Show help (any key closes it) |
 | `q` / `ctrl+c` | Quit |
@@ -305,7 +305,7 @@ Usage: from the directory you launch Claude in, run `/start-ticket-local <TICKET
 
 | Skill step | What it runs | Result |
 | --- | --- | --- |
-| 3.6, after the target repo is chosen and before the worktree is created | `codestattui add --jira <ticket> --repo <REPO> --session "$CLAUDE_CODE_SESSION_ID" --dir "$PWD"`, falling back to `codestattui update <TICKET-ID> --repo <REPO> --session ... --dir ...` if the ticket is already tracked | The ticket gets a row linked to the Claude session. `o` in the TUI can resume that session later. |
+| 3.6, after the target repo is chosen and before the worktree is created | `codestattui add --jira <ticket> --repo <REPO> --session "$CLAUDE_CODE_SESSION_ID" --dir "$PWD"`, falling back to `codestattui update <TICKET-ID> --repo <REPO> --session ... --dir ...` if the ticket is already tracked | The ticket gets a row linked to the Claude session. `o` `c` in the TUI can resume that session later. |
 | 8e, after the draft PR is opened | `codestattui update <TICKET-ID> --repo <REPO> --pr <PR URL>` | The row gains its PR, so the `C`, `P`, `M`, and `D` columns start populating. |
 
 Things to know:
@@ -323,10 +323,10 @@ The same pattern works for any skill, hook, or agent. Call `add` when work start
 Things that may behave differently from your setup:
 
 - **JIRA statuses are workflow-specific.** The defaults are `QA Approved` (ready) and `Ready for QA` (waiting on QA). If your workflow uses other names, set `ready_statuses` and `qa_statuses` in [`config.yaml`](#configyaml), otherwise nothing will show as ready.
-- **`o` launches Claude Code with `--remote-control`.** It runs `claude --resume <session> --remote-control` in the task's `dir`, which makes the session reachable from other devices. Session IDs are per user and per directory. Because `o` runs whatever `session` and `dir` are in `tasks.yaml`, only use a `tasks.yaml` you trust.
+- **`o` `c` launches Claude Code with `--remote-control`.** It runs `claude --resume <session> --remote-control` in the task's `dir`, which makes the session reachable from other devices. Session IDs are per user and per directory. Because `o` `c` runs whatever `session` and `dir` are in `tasks.yaml`, only use a `tasks.yaml` you trust.
 - **GitHub.com only.** PR URLs are parsed and opened assuming `github.com`. GitHub Enterprise hosts are not supported.
-- **JIRA goes through `acli`.** Ticket status and the `J` key both need `acli` installed and logged in to your Atlassian site.
-- **kitty splits are optional.** `o` only opens a split inside kitty with `allow_remote_control` enabled. Everywhere else it resumes in place.
+- **JIRA goes through `acli`.** Ticket status and the `o` `j` key both need `acli` installed and logged in to your Atlassian site.
+- **kitty splits are optional.** `o` `c` only opens a split inside kitty with `allow_remote_control` enabled. Everywhere else it resumes in place.
 - **The `codesign` install step is macOS-only.** Skip it on Linux.
 - **Go version.** `go.mod` requires Go `1.27.2`, so older toolchains will need to upgrade or download it.
 - **It only writes to its own data directory.** `tasks.yaml`, `archive.yaml`, and `config.yaml` live in `~/.config/codestattui` (or `$CODESTATTUI_HOME`). The app otherwise runs read-only `gh`, `acli`, and `git` commands and never modifies your repos.
@@ -335,6 +335,6 @@ Things that may behave differently from your setup:
 
 - **Red `!` on a row.** Open the detail panel (`enter`) to see the error from `gh` or `acli`. This is usually an expired login. Re-run `gh auth login` or log in again with `acli`.
 - **`zsh: killed` after reinstalling on macOS.** See the [Install](#install) section about removing the old binary and re-signing.
-- **`o` does nothing useful.** The task needs a `--session`. Inside kitty, `allow_remote_control` must be enabled in `kitty.conf`, otherwise the session resumes in place and the TUI is suspended until it exits.
+- **`o` `c` does nothing useful.** The task needs a `--session`. Inside kitty, `allow_remote_control` must be enabled in `kitty.conf`, otherwise the session resumes in place and the TUI is suspended until it exits.
 - **`config.yaml: ...` error on startup.** The file failed to parse. Fix the YAML or remove it to use the defaults.
 - **`"X" matches several tasks`.** Use the task id, or add `--repo NAME`.
