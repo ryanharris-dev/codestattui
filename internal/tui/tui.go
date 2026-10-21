@@ -49,7 +49,7 @@ type Model struct {
 	notice    string
 	cursor    int
 	detail    bool
-	byRepo    bool // group the list into per-repo sections
+	sortBy    sortMode // how the list is ordered and sectioned
 	help      bool
 	mode      mode
 	field     task.Field // field being edited in modeEdit
@@ -75,10 +75,19 @@ const (
 	modeEdit         // typing a new value
 	modeSearch       // typing an archive search query
 	modeConfirm      // "a" pressed; waiting for y/n to archive confirmID
+	modeSort         // "s" pressed; waiting for a sort key
+)
+
+type sortMode int
+
+const (
+	sortNone   sortMode = iota // file order
+	sortRepo                   // sections per repo
+	sortTicket                 // sections per set of tasks sharing a ticket or session
 )
 
 func New(cfg config.Config, path, archPath string) Model {
-	return Model{cfg: cfg, path: path, archPath: archPath, results: map[string]provider.Result{},
+	return Model{cfg: cfg, path: path, archPath: archPath, sortBy: sortTicket, results: map[string]provider.Result{},
 		fetchedFP: map[string]string{}, inflight: map[string]bool{}}
 }
 
@@ -163,6 +172,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.mode {
 		case modeUpdate:
 			return m.updateChord(msg)
+		case modeSort:
+			return m.sortChord(msg)
 		case modeEdit:
 			return m.editKey(msg)
 		case modeSearch:
@@ -180,6 +191,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.tasks) {
 				m.mode = modeUpdate
 			}
+		case "s":
+			m.mode = modeSort
 		case "a":
 			if m.cursor >= len(m.tasks) {
 				return m, nil
@@ -227,18 +240,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "k", "t", "up":
 			if m.cursor > 0 {
 				m.cursor--
-			}
-		case "g":
-			// Keep the same task selected across the reorder.
-			var id string
-			if m.cursor < len(m.tasks) {
-				id = m.ordered()[m.cursor].ID
-			}
-			m.byRepo = !m.byRepo
-			for i, t := range m.ordered() {
-				if t.ID == id {
-					m.cursor = i
-				}
 			}
 		case "enter":
 			m.detail = !m.detail
@@ -361,21 +362,118 @@ func (m Model) searchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ordered is the tasks in display order: file order, or grouped by repo (alphabetical,
-// tasks without a repo last) when byRepo is set. The cursor indexes this slice.
+// ordered is the tasks in display order: file order, grouped by repo (alphabetical, tasks
+// without a repo last), or grouped into ticket/session sets. The cursor indexes this slice.
 func (m Model) ordered() []task.Task {
-	if !m.byRepo {
-		return m.tasks
-	}
-	out := append([]task.Task(nil), m.tasks...)
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i].Repo, out[j].Repo
-		if (a == "") != (b == "") {
-			return b == ""
-		}
-		return strings.ToLower(a) < strings.ToLower(b)
-	})
+	out, _ := m.layout()
 	return out
+}
+
+// layout returns the display order plus, per row, the heading of the section it belongs to
+// (nil when the list is not sectioned).
+func (m Model) layout() ([]task.Task, []string) {
+	switch m.sortBy {
+	case sortRepo:
+		out := append([]task.Task(nil), m.tasks...)
+		sort.SliceStable(out, func(i, j int) bool {
+			a, b := out[i].Repo, out[j].Repo
+			if (a == "") != (b == "") {
+				return b == ""
+			}
+			return strings.ToLower(a) < strings.ToLower(b)
+		})
+		heads := make([]string, len(out))
+		for i, t := range out {
+			heads[i] = repoHeading(t.Repo)
+		}
+		return out, heads
+	case sortTicket:
+		return m.sets()
+	}
+	return m.tasks, nil
+}
+
+// ticketOf is the task's ticket key: its jira field, else one named in its label, else the
+// one found from its PR.
+func (m Model) ticketOf(t task.Task) string {
+	switch {
+	case t.Jira != "":
+		return strings.ToUpper(t.Jira)
+	case task.FindJiraKey(t.Label) != "":
+		return task.FindJiraKey(t.Label)
+	}
+	return m.results[t.ID].JiraKey
+}
+
+// sets groups tasks that share a ticket or a Claude session (transitively: A and B sharing a
+// ticket, B and C a session, puts all three together). Sets keep first-seen order; tasks that
+// share nothing go last in one bucket.
+func (m Model) sets() ([]task.Task, []string) {
+	parent := make([]int, len(m.tasks))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		if parent[i] != i {
+			parent[i] = find(parent[i])
+		}
+		return parent[i]
+	}
+	seen := map[string]int{}
+	for i, t := range m.tasks {
+		var keys []string
+		if k := m.ticketOf(t); k != "" {
+			keys = append(keys, "t:"+k)
+		}
+		if t.Session != "" {
+			keys = append(keys, "s:"+t.Session)
+		}
+		for _, k := range keys {
+			if j, ok := seen[k]; ok {
+				parent[find(i)] = find(j)
+			} else {
+				seen[k] = i
+			}
+		}
+	}
+	members := map[int][]int{}
+	var roots []int
+	for i := range m.tasks {
+		r := find(i)
+		if _, ok := members[r]; !ok {
+			roots = append(roots, r)
+		}
+		members[r] = append(members[r], i)
+	}
+	var out, singles []task.Task
+	var heads []string
+	for _, r := range roots {
+		idx := members[r]
+		if len(idx) == 1 {
+			singles = append(singles, m.tasks[idx[0]])
+			continue
+		}
+		head := ""
+		for _, i := range idx {
+			if k := m.ticketOf(m.tasks[i]); k != "" {
+				head = k
+				break
+			}
+		}
+		if head == "" {
+			head = "session " + trunc(m.tasks[idx[0]].Session, 8)
+		}
+		for _, i := range idx {
+			out = append(out, m.tasks[i])
+			heads = append(heads, head)
+		}
+	}
+	for _, t := range singles {
+		out = append(out, t)
+		heads = append(heads, "single tasks")
+	}
+	return out, heads
 }
 
 func repoHeading(repo string) string {
@@ -447,6 +545,37 @@ func kittySplitCmd(windowID string, t task.Task, fallback *exec.Cmd) tea.Cmd {
 		}
 		return nil
 	})
+}
+
+// sortChord handles the key after "s", choosing how the list is grouped.
+func (m Model) sortChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	var to sortMode
+	switch msg.String() {
+	case "r":
+		to = sortRepo
+	case "t":
+		to = sortTicket
+	case "n":
+		to = sortNone
+	case "esc":
+		return m, nil
+	default:
+		m.notice = "no sort bound to " + msg.String()
+		return m, nil
+	}
+	// Keep the same task selected across the reorder.
+	var id string
+	if m.cursor < len(m.tasks) {
+		id = m.ordered()[m.cursor].ID
+	}
+	m.sortBy = to
+	for i, t := range m.ordered() {
+		if t.ID == id {
+			m.cursor = i
+		}
+	}
+	return m, nil
 }
 
 // updateChord handles the key after "u", choosing which field to edit.
@@ -620,13 +749,14 @@ func (m Model) View() string {
 		return b.String()
 	}
 	prev := "\x00"
-	for i, t := range m.ordered() {
-		if m.byRepo && t.Repo != prev {
+	rows, heads := m.layout()
+	for i, t := range rows {
+		if heads != nil && heads[i] != prev {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString(bold.Render(repoHeading(t.Repo)) + "\n")
-			prev = t.Repo
+			b.WriteString(bold.Render(heads[i]) + "\n")
+			prev = heads[i]
 		}
 		b.WriteString(m.row(t, i == m.cursor) + "\n")
 	}
@@ -640,6 +770,9 @@ func (m Model) View() string {
 	case modeUpdate:
 		b.WriteString("\n" + cyan.Render("update: ") + dim.Render(updateHelp()+" · esc cancel"))
 		return b.String()
+	case modeSort:
+		b.WriteString("\n" + cyan.Render("sort: ") + dim.Render("r=repo t=ticket/session n=none · esc cancel"))
+		return b.String()
 	case modeConfirm:
 		b.WriteString("\n" + cyan.Render("archive ") + bold.Render(m.confirmName) + cyan.Render("? ") + dim.Render("y confirm · any other key cancels"))
 		return b.String()
@@ -647,7 +780,7 @@ func (m Model) View() string {
 		b.WriteString("\n" + cyan.Render(m.field.Name+": ") + string(m.input) + "█" + dim.Render("  enter save · esc cancel"))
 		return b.String()
 	}
-	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · g group by repo · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
+	b.WriteString("\n" + dim.Render("j/k or w/t move · enter detail · s sort · u update · a archive · A archived · o resume claude · J jira · P PR · r refresh · ? help · q quit"))
 	return b.String()
 }
 
@@ -723,7 +856,7 @@ func (m Model) helpView() string {
 		bold.Render("Keys"),
 		"  j/k or w/t  move",
 		"  enter       toggle detail",
-		"  g           toggle grouping by repo",
+		"  s           sort: r group by repo · t group by ticket/session sets · n none",
 		"  u           update a field (" + updateHelp() + ")",
 		"  a           archive task (moves it to archive.yaml)",
 		"  A           browse archive (/ search · U restore · esc back)",
@@ -770,7 +903,7 @@ func (m Model) row(t task.Task, selected bool) string {
 	}
 	name := t.Display()
 	repo := ""
-	if t.Repo != "" && !m.byRepo {
+	if t.Repo != "" && m.sortBy != sortRepo {
 		repo = " " + cyan.Render("("+t.Repo+")")
 	}
 	idw := 0 // pad ids to the widest so labels stay aligned

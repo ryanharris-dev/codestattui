@@ -234,7 +234,7 @@ A spinner next to the title shows how many tasks are being refreshed.
 | `k` / `t` / `↑` | Move up |
 | `enter` | Toggle the detail panel for the selected task |
 | `esc` | Close the detail panel |
-| `g` | Toggle grouping into per-repo sections (alphabetical, tasks with no repo last) |
+| `s` then `r` / `t` / `n` | Sort: group into per-repo sections (alphabetical, no repo last); group into sets sharing a ticket or Claude session, with unshared tasks in a final "single tasks" section; or back to file order. Defaults to `t` |
 | `u` | Update a field of the selected task. Press `u`, then a field key (below), type the new value, and press `enter` to save or `esc` to cancel. An empty value clears the field. |
 | `a` | Archive the selected task. Press `y` to confirm, or any other key to cancel. |
 | `A` | Open the archive view |
