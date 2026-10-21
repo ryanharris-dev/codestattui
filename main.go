@@ -78,7 +78,12 @@ func run(args []string) error {
 		if i := dup(tasks, t); i >= 0 {
 			return fmt.Errorf("task %s already tracks that ticket/PR", tasks[i].ID)
 		}
-		t.ID = task.NewID(tasks)
+		arch, err := task.LoadArchive(archivePath)
+		if err != nil {
+			return err
+		}
+		// Ids are never reused: skip those held by archived tasks too.
+		t.ID = task.NewID(append(tasks[:len(tasks):len(tasks)], task.Tasks(arch)...))
 		if err := task.Save(path, append(tasks, t)); err != nil {
 			return err
 		}
