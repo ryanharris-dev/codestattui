@@ -965,7 +965,7 @@ func (m Model) detailView(t task.Task) string {
 			status("review", r.PR.Approval, r.PR.ApprovalText)
 			status("ci", r.PR.CI, r.PR.CIText)
 			if r.PR.Draft {
-				status("state", provider.Pending, "draft")
+				lines = append(lines, fmt.Sprintf("%s%s %s draft", pad, dim.Render("◌"), dim.Render(fmt.Sprintf("%-6s", "state"))))
 			}
 			status("merge", r.PR.Merge, r.PR.MergeText)
 			if r.PR.Merged {
