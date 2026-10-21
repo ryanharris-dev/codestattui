@@ -369,9 +369,16 @@ func (m Model) ordered() []task.Task {
 	return out
 }
 
+// heading titles a section of the list. set marks a multi-task ticket/session set, whose rows
+// show only the repo because the ticket summary lives in the heading.
+type heading struct {
+	title, sub string
+	set        bool
+}
+
 // layout returns the display order plus, per row, the heading of the section it belongs to
 // (nil when the list is not sectioned).
-func (m Model) layout() ([]task.Task, []string) {
+func (m Model) layout() ([]task.Task, []heading) {
 	switch m.sortBy {
 	case sortRepo:
 		out := append([]task.Task(nil), m.tasks...)
@@ -382,9 +389,9 @@ func (m Model) layout() ([]task.Task, []string) {
 			}
 			return strings.ToLower(a) < strings.ToLower(b)
 		})
-		heads := make([]string, len(out))
+		heads := make([]heading, len(out))
 		for i, t := range out {
-			heads[i] = repoHeading(t.Repo)
+			heads[i] = heading{title: repoHeading(t.Repo)}
 		}
 		return out, heads
 	case sortTicket:
@@ -408,7 +415,7 @@ func (m Model) ticketOf(t task.Task) string {
 // sets groups tasks that share a ticket or a Claude session (transitively: A and B sharing a
 // ticket, B and C a session, puts all three together). Sets keep first-seen order; tasks that
 // share nothing go last in one bucket.
-func (m Model) sets() ([]task.Task, []string) {
+func (m Model) sets() ([]task.Task, []heading) {
 	parent := make([]int, len(m.tasks))
 	for i := range parent {
 		parent[i] = i
@@ -447,22 +454,28 @@ func (m Model) sets() ([]task.Task, []string) {
 		members[r] = append(members[r], i)
 	}
 	var out, singles []task.Task
-	var heads []string
+	var heads []heading
 	for _, r := range roots {
 		idx := members[r]
 		if len(idx) == 1 {
 			singles = append(singles, m.tasks[idx[0]])
 			continue
 		}
-		head := ""
+		head := heading{set: true}
 		for _, i := range idx {
 			if k := m.ticketOf(m.tasks[i]); k != "" {
-				head = k
+				head.title = k
 				break
 			}
 		}
-		if head == "" {
-			head = "session " + trunc(m.tasks[idx[0]].Session, 8)
+		if head.title == "" {
+			head.title = "session " + trunc(m.tasks[idx[0]].Session, 8)
+		}
+		for _, i := range idx {
+			if j := m.results[m.tasks[i].ID].Jira; j != nil && j.Summary != "" {
+				head.sub = j.Summary
+				break
+			}
 		}
 		for _, i := range idx {
 			out = append(out, m.tasks[i])
@@ -471,7 +484,7 @@ func (m Model) sets() ([]task.Task, []string) {
 	}
 	for _, t := range singles {
 		out = append(out, t)
-		heads = append(heads, "single tasks")
+		heads = append(heads, heading{title: "single tasks"})
 	}
 	return out, heads
 }
@@ -748,17 +761,26 @@ func (m Model) View() string {
 		b.WriteString(dim.Render("\nNo tasks. Add one:\n  codestattui add --jira ABC-1 --pr owner/repo#2"))
 		return b.String()
 	}
-	prev := "\x00"
+	var prev heading
 	rows, heads := m.layout()
 	for i, t := range rows {
-		if heads != nil && heads[i] != prev {
-			if i > 0 {
-				b.WriteString("\n")
+		inSet := false
+		if heads != nil {
+			h := heads[i]
+			inSet = h.set
+			if h != prev {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				line := bold.Render(h.title)
+				if h.sub != "" {
+					line += " " + dim.Render(trunc(h.sub, max(0, m.w-lipgloss.Width(h.title)-1)))
+				}
+				b.WriteString(line + "\n")
+				prev = h
 			}
-			b.WriteString(bold.Render(heads[i]) + "\n")
-			prev = heads[i]
 		}
-		b.WriteString(m.row(t, i == m.cursor) + "\n")
+		b.WriteString(m.row(t, i == m.cursor, inSet) + "\n")
 	}
 	if m.detail && m.cursor < len(m.tasks) {
 		b.WriteString("\n" + m.detailView(m.ordered()[m.cursor]))
@@ -872,7 +894,7 @@ func (m Model) helpView() string {
 	return bold.Render("codestattui help") + "\n\n" + strings.Join(rows, "\n")
 }
 
-func (m Model) row(t task.Task, selected bool) string {
+func (m Model) row(t task.Task, selected bool, inSet bool) string {
 	r, have := m.results[t.ID]
 	icons := "○ ○ ○ ○ ○ "
 	mark := " "
@@ -907,7 +929,10 @@ func (m Model) row(t task.Task, selected bool) string {
 	}
 	name := t.Display()
 	repo := ""
-	if t.Repo != "" && m.sortBy != sortRepo {
+	if inSet && t.Repo != "" {
+		// The heading carries the ticket and its summary; the row just says where the work is.
+		name, title = cyan.Render(t.Repo), ""
+	} else if t.Repo != "" && m.sortBy != sortRepo {
 		repo = " " + cyan.Render("("+t.Repo+")")
 	}
 	idw := 0 // pad ids to the widest so labels stay aligned
