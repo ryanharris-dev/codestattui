@@ -194,8 +194,8 @@ Run `codestattui` with no arguments. The list refreshes on the poll interval, an
 Each task is one line:
 
 ```
-  J C P M D ✓
-▸ ● ● ◐ ● ○ ✓ 1 ABC-123 Fix login redirect (api)
+  J C M P D ✓
+▸ ● ● ● ◐ ○ ✓ 1 ABC-123 Fix login redirect (api)
 ```
 
 The columns are:
@@ -204,8 +204,8 @@ The columns are:
 | --- | --- |
 | `J` | JIRA ticket is in a ready status (`ready_statuses`). |
 | `C` | PR CI checks. |
-| `P` | PR review and approval. |
 | `M` | PR is mergeable (no conflicts, up to date, not blocked). |
+| `P` | PR review and approval. |
 | `D` | All checks on the merge commit, after the PR has merged. |
 | `✓` | Everything is ready to merge: ticket ready, PR approved, CI green, and mergeable. |
 | `★` | PR is merged, ticket is ready, and post-merge checks have not failed and are not running. It is safe to archive. |

@@ -753,7 +753,7 @@ func (m Model) View() string {
 		b.WriteString(" " + cyan.Render(spinFrames[m.frame%len(spinFrames)]) + dim.Render(fmt.Sprintf(" refreshing (%d)", n)))
 	}
 	b.WriteString("\n")
-	b.WriteString(dim.Render("  J C P M D ✓") + "\n")
+	b.WriteString(dim.Render("  J C M P D ✓") + "\n")
 	if m.loadErr != nil {
 		b.WriteString(red.Render(trunc("tasks: "+m.loadErr.Error(), m.w)) + "\n")
 	}
@@ -909,7 +909,7 @@ func (m Model) row(t task.Task, selected bool, inSet bool) string {
 			review = dim.Render("◌") // a draft isn't up for review yet
 		}
 		icons = fmt.Sprintf("%s %s %s %s %s ", m.jiraIcon(r),
-			icon(pr.CI), review, icon(pr.Merge), icon(pr.Post))
+			icon(pr.CI), icon(pr.Merge), review, icon(pr.Post))
 		if m.complete(r) {
 			mark = green.Render("★")
 		} else if m.allGood(r) {
